@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.6
+
+- Harness-style Settings tab: `DSH: Open Settings` editor panel with General / Models / Permissions / Connection / opencode / About, mirroring Harness layout (left nav + cards + Save)
+- New settings: `permissionPreset` (workspace-write/danger-full-access), `reasoningEffort`, `maxTokens`; model pill + setup command write through to live ACP session
+- Gear icon in Sessions title bar opens Settings
+
 ## 0.0.5
 
 - Session rename: right-click / command renames DSH sessions (stored locally, shown in tree + chat header)

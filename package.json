@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
@@ -92,10 +92,20 @@
       {
         "command": "deepseekHarness.openDshChat",
         "title": "Open DSH Chat"
+      },
+      {
+        "command": "deepseekHarness.openSettings",
+        "title": "DSH: Open Settings (Harness-style)",
+        "icon": "$(gear)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "deepseekHarness.openSettings",
+          "when": "view == deepseekHarness.sessions",
+          "group": "navigation@0"
+        },
         {
           "command": "deepseekHarness.openChatEditor",
           "when": "view == deepseekHarness.sessions",
@@ -177,6 +187,22 @@
           "type": "string",
           "default": "deepseek-v4",
           "description": "DSH model id (Harness-style model setup). Click the model pill in chat or run DSH: Setup Model."
+        },
+        "deepseekHarness.permissionPreset": {
+          "type": "string",
+          "enum": ["workspace-write", "danger-full-access"],
+          "default": "workspace-write",
+          "description": "Harness permission preset: workspace-write (ask) or danger-full-access (never ask)."
+        },
+        "deepseekHarness.reasoningEffort": {
+          "type": "string",
+          "default": "",
+          "description": "Reasoning effort for new sessions (optional: low/medium/high)."
+        },
+        "deepseekHarness.maxTokens": {
+          "type": "string",
+          "default": "",
+          "description": "Max tokens for new sessions (optional)."
         }
       }
     }

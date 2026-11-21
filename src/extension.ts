@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { DshAcp } from './dshAcp';
+import { SettingsManager } from './settingsPanel';
 import {
   formatSessionForDsh,
   listOpencodeSessions,
@@ -272,6 +273,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const chat = new ChatEditorManager(context, output, dsh);
+  const settings = new SettingsManager(context, dsh, () => {
+    sessionTree.refresh();
+    chat.pushModel();
+  });
 
   context.subscriptions.push(
     vscode.commands.registerCommand('deepseekHarness.openChatEditor', async () => {
@@ -279,6 +284,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('deepseekHarness.openDshChat', async () => {
       chat.open();
+    }),
+    vscode.commands.registerCommand('deepseekHarness.openSettings', async () => {
+      settings.open();
     }),
     vscode.commands.registerCommand('deepseekHarness.refreshOpencode', () => opencodeTree.refresh()),
     vscode.commands.registerCommand('deepseekHarness.refreshSessions', () => sessionTree.refresh()),

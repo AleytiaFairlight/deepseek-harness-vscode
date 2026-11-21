@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.10
+
+- Researched fixes (web-verified): opencode DB now checks `OPENCODE_DB` → `opencode debug paths db` → `%LOCALAPPDATA%/opencode/opencode.db` → XDG → legacy; API-first (`session list`/`api get /api/session`, `session export`) with SQLite WAL-copy + schema-discovery fallback
+- Real ACP transport: ESM dynamic import, `ndJsonStream` + `client().onRequest(requestPermission→cancelled).onNotification(session/update)` + `connect()` + `initialize`/`authenticate`, `session/new|list|resume|close|set_config_option|prompt` via method constants with headless fallback
+- Models unchanged (0.0.7 logic kept): provider picker + SecretStorage keys injected as `*_API_KEY` env
+
 ## 0.0.9
 
 - Chat rebuilt to match the real Harness main panel: session/mode/subagents header, Chat/Trajectory tabs, file-edit cards (+/- diffs), deliverable cards, feedback + usage row, To-dos bar, Harness-style composer (plus, Full access, model/effort picker, blue send)

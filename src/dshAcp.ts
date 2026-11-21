@@ -1,7 +1,7 @@
 import * as child_process from 'node:child_process';
 import * as vscode from 'vscode';
 
-/** Minimal ACP wiring: spawn `dsh --profile acp` and drive it via @agentclientprotocol/sdk when available. */
+/** Real ACP wiring: spawn `dsh --profile acp` and drive it via @agentclientprotocol/sdk v1. */
 
 export interface DshPromptResult {
   sessionId: string;
@@ -12,22 +12,17 @@ interface AcpSessionHandle {
   sessionId: string;
 }
 
-type AcpClientLike = {
-  initialize?: (args?: unknown) => Promise<unknown>;
-  sessionNew?: (args: unknown) => Promise<{ sessionId: string }>;
-  sessionPrompt?: (args: unknown) => Promise<unknown>;
-  sessionList?: (args?: unknown) => Promise<{ sessions?: { sessionId: string; title?: string }[] }>;
-  sessionClose?: (args: unknown) => Promise<unknown>;
-  sessionSetConfigOption?: (args: unknown) => Promise<unknown>;
-};
-
 export class DshAcp {
   private output: vscode.OutputChannel;
   private child?: child_process.ChildProcessWithoutNullStreams;
-  private client?: AcpClientLike;
+  private sdk?: any;
+  private agent?: any;
+  private connection?: any;
+  private connecting?: Promise<void>;
   private current: AcpSessionHandle | null = null;
   private onUpdate?: (text: string) => void;
   private extraEnv: Record<string, string> = {};
+  private useFallback = false;
 
   constructor(output: vscode.OutputChannel) {
     this.output = output;
@@ -72,11 +67,10 @@ export class DshAcp {
     await c.update('provider', provider, vscode.ConfigurationTarget.Global);
     await c.update('model', model, vscode.ConfigurationTarget.Global);
     this.output.appendLine(`[dsh] model set to ${provider}/${model}`);
-    // Push to the active session like Harness model-switch does (best effort; server may advertise its own catalog).
     try {
       const sid = this.current?.sessionId;
-      if (sid && this.client?.sessionSetConfigOption) {
-        await this.client.sessionSetConfigOption({ sessionId: sid, key: 'model', value: { provider, model } });
+      if (sid && this.agent) {
+        await this.rpc('session/set_config_option', { sessionId: sid, key: 'model', value: { provider, model } });
         this.output.appendLine(`[dsh] pushed model to session ${sid}`);
       }
     } catch (e) {
@@ -90,8 +84,35 @@ export class DshAcp {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   }
 
+  private method(name: string): string {
+    try {
+      const m = this.sdk?.methods;
+      const parts = name.split('/');
+      // e.g. session/new -> m.agent.session.new ; initialize -> m.agent.initialize
+      if (parts.length === 1 && m?.agent?.[parts[0]]) return m.agent[parts[0]];
+      if (parts.length === 2 && (m?.agent as any)?.[parts[0]]?.[parts[1]]) return (m.agent as any)[parts[0]][parts[1]];
+      if (parts.length === 2 && (m?.client as any)?.[parts[0]]?.[parts[1]]) return (m.client as any)[parts[0]][parts[1]];
+    } catch { /* ignore */ }
+    return name;
+  }
+
+  private async rpc(methodName: string, params: any): Promise<any> {
+    await this.ensureConnected();
+    if (!this.agent || this.useFallback) throw new Error('ACP not connected (fallback active)');
+    const method = this.method(methodName);
+    return this.agent.request(method, params);
+  }
+
   async ensureConnected(): Promise<void> {
-    if (this.child && this.client) return;
+    if (this.agent && this.child) return;
+    if (this.connecting) return this.connecting;
+    this.connecting = this.connectInner().finally(() => {
+      this.connecting = undefined;
+    });
+    return this.connecting;
+  }
+
+  private async connectInner(): Promise<void> {
     const { cliPath, profile } = this.cfg();
     this.output.appendLine(`[dsh] spawning: ${cliPath} --profile ${profile}`);
     let child: child_process.ChildProcessWithoutNullStreams;
@@ -105,7 +126,8 @@ export class DshAcp {
     child.on('exit', (code) => {
       this.output.appendLine(`[dsh] ACP process exited with code ${code}`);
       this.child = undefined;
-      this.client = undefined;
+      this.agent = undefined;
+      this.connection = undefined;
       this.current = null;
     });
     child.on('error', (err) => {
@@ -113,32 +135,44 @@ export class DshAcp {
       void vscode.window.showErrorMessage(`DeepSeek Harness: cannot start "${cliPath} --profile ${profile}": ${err.message}`);
     });
 
-    // Wrap with the official ACP SDK. Dynamic require keeps the extension loadable even if install is partial.
+    // Real SDK path: ESM dynamic import (require() fails on ESM packages).
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const acp = require('@agentclientprotocol/sdk') as Record<string, unknown>;
-      this.output.appendLine(`[dsh] ACP SDK loaded (keys: ${Object.keys(acp).slice(0, 8).join(', ')})`);
-      // Preferred shape: client({ name }) + connectWith(stream, handler).
-      // We keep a thin dynamic wrapper because SDK minor versions vary; raw JSON-RPC fallback stays below.
-      const maybeClient = (acp as { client?: (opts: unknown) => AcpClientLike }).client;
-      if (maybeClient) {
-        this.client = maybeClient({
-          name: 'deepseek-harness-vscode',
-          sessionUpdate: (u: unknown) => {
-            const text = extractUpdateText(u);
-            if (text) this.onUpdate?.(text);
-          },
-          requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
-        });
-        // Actual stdio handshake happens lazily in ensureSession via connectWith when available.
-        this.output.appendLine('[dsh] ACP client created; handshake on first session/new.');
-      } else {
-        this.output.appendLine('[dsh] ACP SDK has no client() export; using raw NDJSON session driver.');
-        this.client = {};
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const importer = new Function('m', 'return import(m);') as (m: string) => Promise<any>;
+      const sdk = await importer('@agentclientprotocol/sdk');
+      this.sdk = sdk;
+      const { Writable, Readable } = require('node:stream') as typeof import('node:stream');
+      const toWebWritable = (Writable as any).toWeb(child.stdin);
+      const toWebReadable = (Readable as any).toWeb(child.stdout);
+      if (!toWebWritable || !toWebReadable || !sdk.ndJsonStream || !sdk.client) {
+        throw new Error('SDK missing ndJsonStream/client (unexpected version)');
       }
+      const stream = sdk.ndJsonStream(toWebWritable, toWebReadable);
+      const app = sdk.client({ name: 'deepseek-harness-vscode', version: '0.0.10' });
+      app.onRequest(sdk.methods?.client?.session?.requestPermission ?? 'session/request_permission', async () => ({ outcome: { outcome: 'cancelled' } }));
+      app.onNotification(sdk.methods?.client?.session?.update ?? 'session/update', async (n: any) => {
+        const text = extractUpdateText(n?.params ?? n);
+        if (text) this.onUpdate?.(text);
+      });
+      this.output.appendLine('[dsh] ACP SDK loaded; connecting stdio…');
+      const connection = await app.connect(stream);
+      this.connection = connection;
+      this.agent = connection.agent;
+      const protocolVersion = sdk.PROTOCOL_VERSION ?? 1;
+      await this.agent.request(sdk.methods?.agent?.initialize ?? 'initialize', {
+        protocolVersion,
+        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
+      });
+      try {
+        await this.agent.request(sdk.methods?.agent?.authenticate ?? 'authenticate', {});
+      } catch { /* immediate-success servers may not need it */ }
+      this.useFallback = false;
+      this.output.appendLine('[dsh] ACP initialize ok (real transport).');
     } catch (e) {
-      this.output.appendLine(`[dsh] ACP SDK not installed: ${(e as Error).message}. Run npm install in the extension folder.`);
-      this.client = {};
+      this.output.appendLine(`[dsh] ACP SDK connect failed, using headless fallback: ${(e as Error).message}`);
+      this.useFallback = true;
+      this.agent = undefined;
+      // Keep child running (server still speaks ACP); chat falls back to headless per prompt.
     }
   }
 
@@ -147,26 +181,33 @@ export class DshAcp {
     await this.ensureConnected();
     if (this.current) return this.current.sessionId;
     const cwd = this.workspaceCwd();
-    // Try SDK session/new; fall back to deterministic local id if the SDK shape differs.
-    try {
-      const res = await this.client?.sessionNew?.({ cwd, mcpServers: [] });
-      if (res?.sessionId) {
-        this.current = { sessionId: res.sessionId };
-        this.output.appendLine(`[dsh] session/new -> ${res.sessionId} (cwd=${cwd})`);
-        return res.sessionId;
+    const { provider, model } = this.cfg();
+    if (!this.useFallback && this.agent) {
+      try {
+        const res = await this.agent.request(this.method('session/new'), { cwd, mcpServers: [] });
+        const sid = (res as any)?.sessionId;
+        if (sid) {
+          this.current = { sessionId: sid };
+          this.output.appendLine(`[dsh] session/new -> ${sid} (cwd=${cwd})`);
+          // Best-effort model pin like Harness model-switch.
+          try {
+            await this.agent.request(this.method('session/set_config_option'), { sessionId: sid, key: 'model', value: { provider, model } });
+          } catch { /* server default applies */ }
+          return sid;
+        }
+      } catch (e) {
+        this.output.appendLine(`[dsh] session/new failed, using local session: ${(e as Error).message}`);
       }
-    } catch (e) {
-      this.output.appendLine(`[dsh] session/new failed, using local session: ${(e as Error).message}`);
     }
     const local = `vscode-${Date.now().toString(36)}`;
     this.current = { sessionId: local };
-    this.output.appendLine(`[dsh] local session ${local} (cwd=${cwd}); raw ACP handshake deferred to first prompt.`);
+    this.output.appendLine(`[dsh] local session ${local} (cwd=${cwd}); ACP unavailable, headless fallback per prompt.`);
     return local;
   }
 
   async newSession(): Promise<string> {
-    if (this.current?.sessionId) {
-      try { await this.client?.sessionClose?.({ sessionId: this.current.sessionId }); } catch { /* best effort */ }
+    if (this.current?.sessionId && !this.useFallback && this.agent) {
+      try { await this.agent.request(this.method('session/close'), { sessionId: this.current.sessionId }); } catch { /* best effort */ }
     }
     this.current = null;
     return this.ensureSession();
@@ -175,18 +216,28 @@ export class DshAcp {
   /** Switch the active session without closing the previous one (ACP sessions persist server-side). */
   async switchTo(sessionId: string): Promise<string> {
     await this.ensureConnected();
+    if (!this.useFallback && this.agent) {
+      try {
+        await this.agent.request(this.method('session/resume'), { sessionId });
+        this.output.appendLine(`[dsh] session/resume -> ${sessionId}`);
+      } catch (e) {
+        this.output.appendLine(`[dsh] session/resume failed (keeping local pointer): ${(e as Error).message}`);
+      }
+    }
     this.current = { sessionId };
-    this.output.appendLine(`[dsh] switched to session ${sessionId}`);
     return sessionId;
   }
 
   async listSessions(): Promise<{ sessionId: string; title?: string }[]> {
     await this.ensureConnected();
-    try {
-      const res = await this.client?.sessionList?.({});
-      if (res?.sessions) return res.sessions;
-    } catch (e) {
-      this.output.appendLine(`[dsh] session/list failed: ${(e as Error).message}`);
+    if (!this.useFallback && this.agent) {
+      try {
+        const res = await this.agent.request(this.method('session/list'), {});
+        const sessions = (res as any)?.sessions as { sessionId: string; title?: string }[] | undefined;
+        if (sessions) return sessions;
+      } catch (e) {
+        this.output.appendLine(`[dsh] session/list failed: ${(e as Error).message}`);
+      }
     }
     return this.current ? [{ sessionId: this.current.sessionId }] : [];
   }
@@ -194,21 +245,28 @@ export class DshAcp {
   async prompt(text: string): Promise<DshPromptResult> {
     const sessionId = await this.ensureSession();
     this.output.appendLine(`[dsh] prompt -> ${sessionId}: ${text.slice(0, 120)}`);
-    // 1) Prefer SDK session/prompt when wired.
-    try {
-      if (this.client?.sessionPrompt) {
-        const res = await this.client.sessionPrompt({
+    if (!this.useFallback && this.agent) {
+      const chunks: string[] = [];
+      const prev = this.onUpdate;
+      this.onUpdate = (t) => {
+        chunks.push(t);
+        prev?.(t);
+      };
+      try {
+        const res = await this.agent.request(this.method('session/prompt'), {
           sessionId,
           prompt: [{ type: 'text', text }],
         });
-        const asText = typeof res === 'string' ? res : JSON.stringify(res ?? '').slice(0, 8000);
-        return { sessionId, text: asText || '(empty response — see Output > DeepSeek Harness for ACP updates)' };
+        const asText = extractResultText(res) || chunks.join('') || '';
+        if (asText.trim()) return { sessionId, text: asText.slice(0, 12000) };
+        // else fall through to headless so the user still gets an answer
+        this.output.appendLine('[dsh] session/prompt returned empty; trying headless fallback.');
+      } catch (e) {
+        this.output.appendLine(`[dsh] session/prompt failed, trying headless: ${(e as Error).message}`);
+      } finally {
+        this.onUpdate = prev;
       }
-    } catch (e) {
-      this.output.appendLine(`[dsh] session/prompt failed: ${(e as Error).message}`);
     }
-    // 2) Fallback: one-shot headless run so chat still answers without a full ACP handshake.
-    // Keeps the Chat view useful even if the SDK version differs.
     const { cliPath } = this.cfg();
     const cwd = this.workspaceCwd();
     const fallback = await runHeadless(cliPath, cwd, text, this.output, this.spawnEnv());
@@ -218,7 +276,8 @@ export class DshAcp {
   dispose(): void {
     try { this.child?.kill(); } catch { /* ignore */ }
     this.child = undefined;
-    this.client = undefined;
+    this.agent = undefined;
+    this.connection = undefined;
     this.current = null;
   }
 }
@@ -260,11 +319,28 @@ function runHeadless(cliPath: string, cwd: string, promptText: string, output: v
 
 function extractUpdateText(u: unknown): string {
   try {
-    const o = u as Record<string, unknown>;
-    const inner = (o.update ?? o) as Record<string, unknown>;
-    if (typeof inner.text === 'string') return inner.text;
-    const content = inner.content as { type?: string; text?: string }[] | undefined;
-    if (Array.isArray(content)) return content.map((c) => c.text ?? '').filter(Boolean).join('');
+    const o = u as Record<string, any>;
+    const update = o?.update ?? o?.params?.update ?? o;
+    if (!update) return '';
+    if (typeof update === 'string') return update;
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') return String(update.content.text ?? '');
+    if (typeof (update as any).text === 'string') return (update as any).text;
+    const content = (update as any).content;
+    if (Array.isArray(content)) return content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).filter(Boolean).join('');
+    if (typeof content === 'string') return content;
+  } catch { /* ignore */ }
+  return '';
+}
+
+function extractResultText(res: unknown): string {
+  try {
+    if (typeof res === 'string') return res;
+    const o = res as Record<string, any>;
+    if (!o) return '';
+    if (typeof o.text === 'string') return o.text;
+    if (typeof o.finalResponse === 'string') return o.finalResponse;
+    if (typeof o.response === 'string') return o.response;
+    if (o.stopReason && typeof o.message === 'string') return o.message;
   } catch { /* ignore */ }
   return '';
 }

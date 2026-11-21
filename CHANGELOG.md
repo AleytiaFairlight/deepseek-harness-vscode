@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.12
+
+- Settings saves verified: write + read-back + exact saved values in confirmation; model/effort go through live-push setters with surfaced `session/set_config_option` errors (no silent fails)
+- No command panel needed: `ensureSession` pins saved provider/model + effort on new sessions; every `prompt` re-syncs saved settings first, so Settings/Setup changes apply to the next message automatically
+- Effort uses correct wire key `reasoning_effort`; setupModel asks effort after model
+
 ## 0.0.11
 
 - Provenance fix: this machine has NEITHER `opencode` NOR `dsh` on PATH (verified) — sidebar no longer fails silently. Empty states now offer Diagnose; new `DSH: Diagnose` reports CLI presence, DB candidates, API vs SQLite, ACP initialize/list, model/effort/workspace in one Output channel

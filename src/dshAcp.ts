@@ -66,35 +66,53 @@ export class DshAcp {
   }
 
   /** Push reasoning effort like Harness Effort menu (key is `reasoning_effort` on the wire). */
-  async setEffort(effort: string): Promise<void> {
+  async setEffort(effort: string): Promise<boolean> {
     const c = vscode.workspace.getConfiguration('deepseekHarness');
     await c.update('reasoningEffort', effort || undefined, vscode.ConfigurationTarget.Global);
-    this.output.appendLine(`[dsh] reasoning effort set to ${effort || '(default)'}`);
+    const saved = c.get<string>('reasoningEffort', '') ?? '';
+    this.output.appendLine(`[dsh] reasoning effort saved=${saved || '(default)'}`);
     try {
       const sid = this.current?.sessionId;
-      if (sid && this.agent && effort) {
-        await this.agent.request(this.method('session/set_config_option'), { sessionId: sid, key: 'reasoning_effort', value: effort });
-        this.output.appendLine(`[dsh] pushed effort to session ${sid}`);
+      if (sid && this.agent && !this.useFallback && effort) {
+        const res = await this.agent.request(this.method('session/set_config_option'), { sessionId: sid, key: 'reasoning_effort', value: effort });
+        this.output.appendLine(`[dsh] pushed effort to session ${sid}: ${JSON.stringify(res ?? {}).slice(0, 300)}`);
+        return true;
       }
+      return false;
     } catch (e) {
-      this.output.appendLine(`[dsh] effort push failed (applies to next session): ${(e as Error).message}`);
+      const msg = `Effort live-push failed (${(e as Error).message}); saved value applies to next session.`;
+      this.output.appendLine(`[dsh] ${msg}`);
+      void vscode.window.showWarningMessage(`DSH: ${msg}`);
+      return false;
     }
   }
 
   /** Harness-style model setup: persist provider/model and push to live ACP sessions. */
-  async setModel(provider: string, model: string): Promise<void> {
+  async setModel(provider: string, model: string): Promise<boolean> {
     const c = vscode.workspace.getConfiguration('deepseekHarness');
     await c.update('provider', provider, vscode.ConfigurationTarget.Global);
     await c.update('model', model, vscode.ConfigurationTarget.Global);
-    this.output.appendLine(`[dsh] model set to ${provider}/${model}`);
+    const saved = this.getModel();
+    this.output.appendLine(`[dsh] model saved=${saved.provider}/${saved.model}`);
+    if (saved.provider !== provider || saved.model !== model) {
+      const msg = `Settings write verification failed (wanted ${provider}/${model}, got ${saved.provider}/${saved.model}). Check Settings sync / file permissions.`;
+      this.output.appendLine(`[dsh] ${msg}`);
+      void vscode.window.showWarningMessage(`DSH: ${msg}`);
+      return false;
+    }
     try {
       const sid = this.current?.sessionId;
-      if (sid && this.agent) {
-        await this.rpc('session/set_config_option', { sessionId: sid, key: 'model', value: { provider, model } });
-        this.output.appendLine(`[dsh] pushed model to session ${sid}`);
+      if (sid && this.agent && !this.useFallback) {
+        const res = await this.rpc('session/set_config_option', { sessionId: sid, key: 'model', value: { provider, model } });
+        this.output.appendLine(`[dsh] pushed model to session ${sid}: ${JSON.stringify(res ?? {}).slice(0, 300)}`);
+        return true;
       }
+      return false;
     } catch (e) {
-      this.output.appendLine(`[dsh] model push failed (will apply to next session): ${(e as Error).message}`);
+      const msg = `Model live-push failed (${(e as Error).message}); saved ${provider}/${model} applies to next session/new prompt.`;
+      this.output.appendLine(`[dsh] ${msg}`);
+      void vscode.window.showWarningMessage(`DSH: ${msg}`);
+      return false;
     }
   }
 
@@ -196,12 +214,13 @@ export class DshAcp {
     }
   }
 
-  /** Create or reuse a session. Returns session id. */
+  /** Create or reuse a session. Returns session id. Saved settings apply automatically — no command panel needed. */
   async ensureSession(): Promise<string> {
     await this.ensureConnected();
     if (this.current) return this.current.sessionId;
     const cwd = this.workspaceCwd();
     const { provider, model } = this.cfg();
+    const effort = this.getEffort();
     if (!this.useFallback && this.agent) {
       try {
         const res = await this.agent.request(this.method('session/new'), { cwd, mcpServers: [] });
@@ -209,10 +228,17 @@ export class DshAcp {
         if (sid) {
           this.current = { sessionId: sid };
           this.output.appendLine(`[dsh] session/new -> ${sid} (cwd=${cwd})`);
-          // Best-effort model pin like Harness model-switch.
+          // Pin saved model + effort like Harness model-switch (server default applies on failure).
           try {
             await this.agent.request(this.method('session/set_config_option'), { sessionId: sid, key: 'model', value: { provider, model } });
-          } catch { /* server default applies */ }
+            this.output.appendLine(`[dsh] pinned saved model ${provider}/${model} on ${sid}`);
+          } catch (e) { this.output.appendLine(`[dsh] model pin failed: ${(e as Error).message}`); }
+          if (effort) {
+            try {
+              await this.agent.request(this.method('session/set_config_option'), { sessionId: sid, key: 'reasoning_effort', value: effort });
+              this.output.appendLine(`[dsh] pinned saved effort ${effort} on ${sid}`);
+            } catch (e) { this.output.appendLine(`[dsh] effort pin failed: ${(e as Error).message}`); }
+          }
           return sid;
         }
       } catch (e) {
@@ -264,6 +290,15 @@ export class DshAcp {
 
   async prompt(text: string): Promise<DshPromptResult> {
     const sessionId = await this.ensureSession();
+    // Saved settings apply automatically: sync model + effort before every prompt (no command panel needed).
+    if (!this.useFallback && this.agent) {
+      const { provider, model } = this.cfg();
+      const effort = this.getEffort();
+      try { await this.agent.request(this.method('session/set_config_option'), { sessionId, key: 'model', value: { provider, model } }); } catch (e) { this.output.appendLine(`[dsh] pre-prompt model sync failed: ${(e as Error).message}`); }
+      if (effort) {
+        try { await this.agent.request(this.method('session/set_config_option'), { sessionId, key: 'reasoning_effort', value: effort }); } catch (e) { this.output.appendLine(`[dsh] pre-prompt effort sync failed: ${(e as Error).message}`); }
+      }
+    }
     this.output.appendLine(`[dsh] prompt -> ${sessionId}: ${text.slice(0, 120)}`);
     if (!this.useFallback && this.agent) {
       const chunks: string[] = [];

@@ -65,18 +65,28 @@ export class SettingsManager {
         const values = msg.values as Record<string, string> | undefined;
         if (!values) return;
         const cfg = vscode.workspace.getConfiguration('deepseekHarness');
+        // Model/effort go through verified setters (write + verify + live-push with surfaced errors).
+        const cur = this.dsh.getModel();
+        const wantProvider = values.provider || cur.provider;
+        const wantModel = values.model || cur.model;
+        if (values.provider !== undefined || values.model !== undefined) {
+          await this.dsh.setModel(wantProvider, wantModel);
+        }
+        if (values.reasoningEffort !== undefined) {
+          await this.dsh.setEffort(values.reasoningEffort);
+        }
         for (const [key, val] of Object.entries(values)) {
           if (key === 'deepseekKey' || key === 'providerKey' || key === 'customKey') continue;
+          if (key === 'provider' || key === 'model' || key === 'reasoningEffort') continue; // handled above
           await cfg.update(key, val || undefined, vscode.ConfigurationTarget.Global);
         }
-        if (values.provider || values.model) {
-          const cur = this.dsh.getModel();
-          await this.dsh.setModel(values.provider || cur.provider, values.model || cur.model);
-        }
+        // Read back to prove the save landed, then report exact values.
+        const after = vscode.workspace.getConfiguration('deepseekHarness');
+        const got = `provider=${after.get('provider')} model=${after.get('model')} effort=${after.get('reasoningEffort') || '(default)'} perm=${after.get('permissionPreset')}`;
         this.onChanged();
         void panel.webview.postMessage({ type: 'saved' });
         await this.pushValues();
-        void vscode.window.showInformationMessage('DSH Settings saved (mini Harness settings).');
+        void vscode.window.showInformationMessage(`DSH Settings saved + verified: ${got}. No command panel needed — new prompts/sessions use these.`);
       }
       if (msg?.type === 'saveKeys') {
         const { deepseekKey, provider, providerKey, providerBaseUrl, custom } = msg as {

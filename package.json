@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
@@ -101,6 +101,14 @@
         "command": "deepseekHarness.openSettings",
         "title": "DSH: Open Settings (Harness-style)",
         "icon": "$(gear)"
+      },
+      {
+        "command": "deepseekHarness.diagnose",
+        "title": "DSH: Diagnose opencode + DSH connections"
+      },
+      {
+        "command": "deepseekHarness.selectWorkspace",
+        "title": "DSH: Select Workspace (cwd for new sessions)"
       }
     ],
     "menus": {

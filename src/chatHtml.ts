@@ -57,8 +57,8 @@ pre{background:#0f0f0f;border:1px solid var(--border);border-radius:8px;padding:
 <div id="ctxchip"><button id="ctxx">✕</button><span id="ctxtext"></span></div>
 <div class="composer"><div class="box">
 <textarea id="in" placeholder="Message or run a task, / commands, @ files or sessions"></textarea>
-<div class="cbar"><button class="plus" id="plus" title="Attach">+</button><button class="perm" id="permbtn" title="Open Settings → Permissions">🛡 <span id="permname">Full access</span> ▾</button>
-<button class="modelpick" id="modelpill"><span id="modelname">deepseek-v4</span> <span class="dim" id="effort">Xhigh ▾</span></button>
+<div class="cbar"><button class="plus" id="plus" title="Attach">+</button><button class="perm" id="permbtn" title="Open Settings → Permissions">🛡 <span id="permname">Full access</span> ▾</button><button class="perm" id="cwdbtn" title="Workspace for new sessions (single cwd per ACP session)">📁 <span id="cwdname">workspace</span> ▾</button>
+<button class="modelpick" id="modelpill"><span id="modelname">deepseek-v4</span> <span class="dim" id="effort">effort ▾</span></button>
 <button class="send" id="send">↑</button></div>
 </div></div>
 <div class="status"><span id="turns">0 turns</span><span id="toks">0 tok</span><span>Cache hit 99%</span></div>
@@ -90,7 +90,9 @@ function setBusy(b){ busy=b; sendBtn.disabled=b; }
 function send(){ const t=input.value; if(!t.trim()||busy) return; input.value=''; userText(t); thinking(); setBusy(true); turns++; document.getElementById('turns').textContent=turns+' turns'; vscode.postMessage({type:'prompt', text:t}); }
 sendBtn.onclick=send;
 document.getElementById('modelpill').onclick=()=>vscode.postMessage({type:'modelSetup'});
+document.getElementById('effort').onclick=(e)=>{ e.stopPropagation(); vscode.postMessage({type:'effortSetup'}); };
 document.getElementById('permbtn').onclick=()=>vscode.postMessage({type:'openSettings'});
+document.getElementById('cwdbtn').onclick=()=>vscode.postMessage({type:'selectWorkspace'});
 document.getElementById('ctxx').onclick=()=>{ document.getElementById('ctxchip').className=''; };
 input.addEventListener('keydown', e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ send(); } });
 input.addEventListener('input', ()=>{ input.style.height='auto'; input.style.height=Math.min(180,input.scrollHeight)+'px'; });
@@ -99,9 +101,9 @@ window.addEventListener('message', e=>{ const m=e.data;
  if(m.type==='answer'){ rmThinking(); setBusy(false); dshText(m.text, true); if(m.sessionId) document.getElementById('sessline').textContent=m.sessionId.slice(0,14); }
  if(m.type==='stream'){ rmThinking(); dshText(m.text, false); }
  if(m.type==='prefill'){ input.value=m.text||''; document.getElementById('ctxtext').textContent=m.hint||''; document.getElementById('ctxchip').className='show'; input.focus(); }
- if(m.type==='model'){ if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; }
- if(m.type==='init'){ if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.title) document.getElementById('sessname').textContent=m.title; }
- if(m.type==='session'){ document.getElementById('sessname').textContent=m.title||('session '+(m.sessionId||'').slice(0,8)); document.getElementById('sessline').textContent=(m.sessionId||'').slice(0,14); renderHistory(m.history); if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; }
+ if(m.type==='model'){ if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.effort!==undefined) document.getElementById('effort').textContent=(m.effort||'default')+' ▾'; if(m.cwd) document.getElementById('cwdname').textContent=String(m.cwd).split(/[\\/]/).pop()||m.cwd; }
+ if(m.type==='init'){ if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.effort!==undefined) document.getElementById('effort').textContent=(m.effort||'default')+' ▾'; if(m.cwd) document.getElementById('cwdname').textContent=String(m.cwd).split(/[\\/]/).pop()||m.cwd; if(m.title) document.getElementById('sessname').textContent=m.title; }
+ if(m.type==='session'){ document.getElementById('sessname').textContent=m.title||('session '+(m.sessionId||'').slice(0,8)); document.getElementById('sessline').textContent=(m.sessionId||'').slice(0,14); renderHistory(m.history); if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.effort!==undefined) document.getElementById('effort').textContent=(m.effort||'default')+' ▾'; if(m.cwd) document.getElementById('cwdname').textContent=String(m.cwd).split(/[\\/]/).pop()||m.cwd; }
 });
 </script></body></html>`;
 }

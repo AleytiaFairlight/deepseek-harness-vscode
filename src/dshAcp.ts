@@ -61,6 +61,26 @@ export class DshAcp {
     return { provider, model };
   }
 
+  getEffort(): string {
+    return vscode.workspace.getConfiguration('deepseekHarness').get<string>('reasoningEffort', '') ?? '';
+  }
+
+  /** Push reasoning effort like Harness Effort menu (key is `reasoning_effort` on the wire). */
+  async setEffort(effort: string): Promise<void> {
+    const c = vscode.workspace.getConfiguration('deepseekHarness');
+    await c.update('reasoningEffort', effort || undefined, vscode.ConfigurationTarget.Global);
+    this.output.appendLine(`[dsh] reasoning effort set to ${effort || '(default)'}`);
+    try {
+      const sid = this.current?.sessionId;
+      if (sid && this.agent && effort) {
+        await this.agent.request(this.method('session/set_config_option'), { sessionId: sid, key: 'reasoning_effort', value: effort });
+        this.output.appendLine(`[dsh] pushed effort to session ${sid}`);
+      }
+    } catch (e) {
+      this.output.appendLine(`[dsh] effort push failed (applies to next session): ${(e as Error).message}`);
+    }
+  }
+
   /** Harness-style model setup: persist provider/model and push to live ACP sessions. */
   async setModel(provider: string, model: string): Promise<void> {
     const c = vscode.workspace.getConfiguration('deepseekHarness');

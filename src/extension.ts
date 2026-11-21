@@ -31,12 +31,18 @@ class OpencodeTreeProvider implements vscode.TreeDataProvider<OpencodeItem> {
     if (element?.session) return [];
     const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
     const { path: dbPath, source } = resolveOpencodeDbPath(override);
+    const diagnoseItem = (label: string) => {
+      const item = new OpencodeItem(label, vscode.TreeItemCollapsibleState.None);
+      item.command = { command: 'deepseekHarness.diagnose', title: 'Diagnose opencode + DSH' };
+      item.tooltip = 'Click to run Diagnose (checks opencode CLI, DB paths, dsh CLI, ACP).';
+      return item;
+    };
     if (!dbPath) {
-      return [new OpencodeItem('No persistent history (in-memory DB)', vscode.TreeItemCollapsibleState.None)];
+      return [diagnoseItem('No persistent history (in-memory DB) — click to Diagnose')];
     }
     try {
       const sessions = await listOpencodeSessions(dbPath, 100);
-      if (!sessions.length) return [new OpencodeItem('(no opencode sessions found)', vscode.TreeItemCollapsibleState.None)];
+      if (!sessions.length) return [diagnoseItem('(no opencode sessions: API+DB empty) — click to Diagnose')];
       this.output.appendLine(`[opencode] ${sessions.length} sessions from ${dbPath} (${source})`);
       const groups = new Map<string, OpencodeSession[]>();
       for (const s of sessions) {
@@ -54,7 +60,10 @@ class OpencodeTreeProvider implements vscode.TreeDataProvider<OpencodeItem> {
       return out;
     } catch (e) {
       this.output.appendLine(`[opencode] read failed: ${(e as Error).message}`);
-      return [new OpencodeItem('opencode history unavailable — see Output', vscode.TreeItemCollapsibleState.None)];
+      const item = new OpencodeItem('opencode unavailable — click to Diagnose', vscode.TreeItemCollapsibleState.None);
+      item.command = { command: 'deepseekHarness.diagnose', title: 'Diagnose opencode + DSH' };
+      item.tooltip = (e as Error).message;
+      return [item];
     }
   }
 }
@@ -224,6 +233,16 @@ class ChatEditorManager {
       if (msg?.type === 'modelSetup') {
         void vscode.commands.executeCommand('deepseekHarness.setupModel');
       }
+      if (msg?.type === 'effortSetup') {
+        const pick = await vscode.window.showQuickPick(['off', 'low', 'medium', 'high'], { placeHolder: 'Reasoning effort (Harness Effort menu)' });
+        if (pick) {
+          await this.dsh.setEffort(pick === 'off' ? '' : pick);
+          this.pushModel();
+        }
+      }
+      if (msg?.type === 'selectWorkspace') {
+        void vscode.commands.executeCommand('deepseekHarness.selectWorkspace');
+      }
       if (msg?.type === 'openSettings') {
         void vscode.commands.executeCommand('deepseekHarness.openSettings');
       }
@@ -249,14 +268,20 @@ class ChatEditorManager {
     this.transcripts.set(sessionId, list.slice(-200));
   }
 
+  private workspaceLabel(): string {
+    const c = vscode.workspace.getConfiguration('deepseekHarness').get<string>('defaultCwd', '');
+    if (c?.trim()) return c.trim();
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  }
+
   setSession(id: string, title?: string): void {
-    const perm = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
-    void this.open().webview.postMessage({ type: 'session', sessionId: id, title, history: this.transcripts.get(id) ?? [], model: this.dsh.getModel(), permissionPreset: perm });
+    const cfg = vscode.workspace.getConfiguration('deepseekHarness');
+    void this.open().webview.postMessage({ type: 'session', sessionId: id, title, history: this.transcripts.get(id) ?? [], model: this.dsh.getModel(), permissionPreset: cfg.get('permissionPreset', 'workspace-write'), effort: this.dsh.getEffort(), cwd: this.workspaceLabel() });
   }
 
   pushModel(): void {
-    const perm = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
-    void this.panel?.webview.postMessage({ type: 'model', model: this.dsh.getModel(), permissionPreset: perm });
+    const cfg = vscode.workspace.getConfiguration('deepseekHarness');
+    void this.panel?.webview.postMessage({ type: 'model', model: this.dsh.getModel(), permissionPreset: cfg.get('permissionPreset', 'workspace-write'), effort: this.dsh.getEffort(), cwd: this.workspaceLabel() });
   }
 
   /** Load opencode history as chat bubbles (not as a prompt draft). */
@@ -264,7 +289,7 @@ class ChatEditorManager {
     const sid = this.dsh.activeSessionId ?? 'opencode-view';
     this.transcripts.set(sid, msgs.slice(-200));
     this.open();
-    const perm = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
+    const cfg = vscode.workspace.getConfiguration('deepseekHarness');
     void this.panel?.webview.postMessage({
       type: 'session',
       sessionId: sid,
@@ -272,7 +297,9 @@ class ChatEditorManager {
       opencodeId: opencode.id,
       history: msgs.slice(-200),
       model: this.dsh.getModel(),
-      permissionPreset: perm,
+      permissionPreset: cfg.get('permissionPreset', 'workspace-write'),
+      effort: this.dsh.getEffort(),
+      cwd: this.workspaceLabel(),
     });
   }
 
@@ -314,6 +341,31 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('deepseekHarness.refreshOpencode', () => opencodeTree.refresh()),
     vscode.commands.registerCommand('deepseekHarness.refreshSessions', () => sessionTree.refresh()),
+    vscode.commands.registerCommand('deepseekHarness.diagnose', async () => {
+      await runDiagnostics(context, dsh, opencodeTree, sessionTree);
+    }),
+    vscode.commands.registerCommand('deepseekHarness.selectWorkspace', async () => {
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      const items: { label: string; description?: string; path?: string }[] = folders.map((f) => ({
+        label: f.name,
+        description: f.uri.fsPath,
+        path: f.uri.fsPath,
+      }));
+      items.push({ label: '$(folder-opened) Browse…', path: '__browse' });
+      const current = vscode.workspace.getConfiguration('deepseekHarness').get<string>('defaultCwd', '');
+      if (current) items.unshift({ label: `(current) ${current}`, description: 'keep', path: current });
+      const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Workspace for new DSH sessions (single cwd per ACP session)' });
+      if (!pick) return;
+      let dir = pick.path ?? '';
+      if (dir === '__browse') {
+        const uris = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: 'Use as DSH workspace' });
+        if (!uris?.[0]) return;
+        dir = uris[0].fsPath;
+      }
+      await vscode.workspace.getConfiguration('deepseekHarness').update('defaultCwd', dir || undefined, vscode.ConfigurationTarget.Global);
+      chat.pushModel();
+      void vscode.window.showInformationMessage(`DSH workspace: ${dir || '(VS Code workspace folder)'} — new sessions use it as cwd.`);
+    }),
     vscode.commands.registerCommand('deepseekHarness.newDshSession', async () => {
       const id = await dsh.newSession();
       await rememberSession(context, id);
@@ -412,6 +464,11 @@ export function activate(context: vscode.ExtensionContext): void {
         modelId = customM.trim();
       }
       await dsh.setModel(providerId, modelId);
+      // Effort like the Harness Effort menu (only offered levels apply; endpoint default otherwise).
+      const effortPick = await vscode.window.showQuickPick(['(keep)', 'off', 'low', 'medium', 'high'], { placeHolder: 'Reasoning effort (Harness Effort menu)' });
+      if (effortPick && effortPick !== '(keep)') {
+        await dsh.setEffort(effortPick === 'off' ? '' : effortPick);
+      }
       await refreshDshEnv(context, dsh);
       chat.pushModel();
       sessionTree.refresh();
@@ -476,6 +533,61 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   output.appendLine('[dsh] extension activated. Sidebar = sessions + history; main chat opens in the editor.');
+}
+
+async function runDiagnostics(context: vscode.ExtensionContext, dsh: DshAcp, opencodeTree: OpencodeTreeProvider, sessionTree: DshSessionProvider): Promise<void> {
+  const out = vscode.window.createOutputChannel('DeepSeek Harness — Diagnose');
+  out.show(true);
+  const log = (s: string) => { out.appendLine(s); };
+  log('=== DSH diagnose ===');
+  // opencode CLI
+  try {
+    const { execFile } = require('node:child_process') as typeof import('node:child_process');
+    const which = await new Promise<string>((resolve) => {
+      execFile(process.platform === 'win32' ? 'where' : 'which', ['opencode'], (err: any, stdout: any) => resolve(err ? '' : String(stdout || '').trim()));
+    });
+    log(`opencode CLI: ${which || 'NOT FOUND on PATH'}`);
+    if (which) {
+      const ver = await new Promise<string>((resolve) => {
+        execFile('opencode', ['--version'], { timeout: 10000 }, (err: any, stdout: any, stderr: any) => resolve(String(stdout || stderr || err?.message || '').trim().slice(0, 200)));
+      });
+      log(`opencode --version: ${ver || '(no output)'}`);
+    } else {
+      log('Install: https://opencode.ai/docs (then `opencode auth login`). Without it, history uses DB file only.');
+    }
+  } catch (e) { log(`opencode check failed: ${(e as Error).message}`); }
+  // DB candidates
+  try {
+    const { candidateDbPaths, detectOpencodeDbViaCli, resolveOpencodeDbPath } = await import('./opencodeHistory.js');
+    for (const c of candidateDbPaths()) {
+      const fs = require('node:fs') as typeof import('node:fs');
+      log(`DB candidate: ${c.path} [${c.source}] exists=${fs.existsSync(c.path)}`);
+    }
+    const viaCli = await detectOpencodeDbViaCli().catch(() => '');
+    if (viaCli) log(`opencode debug paths db: ${viaCli}`);
+    const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
+    log(`resolved: ${JSON.stringify(resolveOpencodeDbPath(override))}`);
+  } catch (e) { log(`DB check failed: ${(e as Error).message}`); }
+  // dsh CLI + ACP
+  try {
+    const { execFile } = require('node:child_process') as typeof import('node:child_process');
+    const which = await new Promise<string>((resolve) => {
+      execFile(process.platform === 'win32' ? 'where' : 'which', ['dsh'], (err: any, stdout: any) => resolve(err ? '' : String(stdout || '').trim()));
+    });
+    log(`dsh CLI: ${which || 'NOT FOUND on PATH (npm i -g @deepseek-ai/dsh@0.2.2-rc.5, Node>=24.9)'}`);
+  } catch (e) { log(`dsh check failed: ${(e as Error).message}`); }
+  try {
+    await dsh.ensureConnected();
+    log('ACP: ensureConnected ok (or headless fallback active — see main Output channel).');
+    const sessions = await dsh.listSessions();
+    log(`ACP session/list: ${sessions.length} session(s)${sessions[0] ? `, first=${sessions[0].sessionId}` : ''}`);
+  } catch (e) { log(`ACP failed: ${(e as Error).message}`); }
+  log(`model: ${JSON.stringify(dsh.getModel())} effort=${dsh.getEffort() || '(default)'} workspace=${vscode.workspace.getConfiguration('deepseekHarness').get('defaultCwd', '') || '(vscode folder)'}`);
+  opencodeTree.refresh();
+  sessionTree.refresh();
+  void vscode.window.showInformationMessage('Diagnose finished — see Output → DeepSeek Harness — Diagnose.', 'Open Settings').then((v) => {
+    if (v === 'Open Settings') void vscode.commands.executeCommand('deepseekHarness.openSettings');
+  });
 }
 
 async function readCurrentOpencodeMessages(sessionId: string) {

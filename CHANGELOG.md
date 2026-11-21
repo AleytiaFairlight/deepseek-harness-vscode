@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.11
+
+- Provenance fix: this machine has NEITHER `opencode` NOR `dsh` on PATH (verified) — sidebar no longer fails silently. Empty states now offer Diagnose; new `DSH: Diagnose` reports CLI presence, DB candidates, API vs SQLite, ACP initialize/list, model/effort/workspace in one Output channel
+- Workspace controls: `DSH: Select Workspace` (VS Code folders + browse + current), stored as `defaultCwd`, shown as clickable cwd chip + sent as `session/new cwd` (ACP single-cwd limit documented)
+- Model/effort properly: setup asks provider → key (SecretStorage/env) → model → effort (`off/low/medium/high`); pushes `model` + `reasoning_effort` (correct wire key) via `session/set_config_option`; effort + permission + cwd pills live in chat header
+
 ## 0.0.10
 
 - Researched fixes (web-verified): opencode DB now checks `OPENCODE_DB` → `opencode debug paths db` → `%LOCALAPPDATA%/opencode/opencode.db` → XDG → legacy; API-first (`session list`/`api get /api/session`, `session export`) with SQLite WAL-copy + schema-discovery fallback

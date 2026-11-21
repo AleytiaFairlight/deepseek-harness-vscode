@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.9
+
+- Chat rebuilt to match the real Harness main panel: session/mode/subagents header, Chat/Trajectory tabs, file-edit cards (+/- diffs), deliverable cards, feedback + usage row, To-dos bar, Harness-style composer (plus, Full access, model/effort picker, blue send)
+- User text renders as Harness prose (bullets/links/code), assistant as cards/text with timestamps; suggestion chips; 800px centered column
+
 ## 0.0.8
 
 - History click no longer opens an editable file: it loads the transcript directly into the editor chat as bubbles; transcript file is now opt-in via right-click → Open Transcript (read-only preview)

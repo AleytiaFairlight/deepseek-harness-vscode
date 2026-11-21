@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DshAcp, PROVIDER_ENV } from './dshAcp';
 import { SettingsManager, PROVIDER_CATALOG, refreshDshEnv } from './settingsPanel';
+import { chatHtml } from './chatHtml';
 import {
   formatSessionForDsh,
   listOpencodeSessions,
@@ -249,7 +250,8 @@ class ChatEditorManager {
   }
 
   setSession(id: string, title?: string): void {
-    void this.open().webview.postMessage({ type: 'session', sessionId: id, title, history: this.transcripts.get(id) ?? [], model: this.dsh.getModel() });
+    const perm = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
+    void this.open().webview.postMessage({ type: 'session', sessionId: id, title, history: this.transcripts.get(id) ?? [], model: this.dsh.getModel(), permissionPreset: perm });
   }
 
   pushModel(): void {
@@ -262,6 +264,7 @@ class ChatEditorManager {
     const sid = this.dsh.activeSessionId ?? 'opencode-view';
     this.transcripts.set(sid, msgs.slice(-200));
     this.open();
+    const perm = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
     void this.panel?.webview.postMessage({
       type: 'session',
       sessionId: sid,
@@ -269,6 +272,7 @@ class ChatEditorManager {
       opencodeId: opencode.id,
       history: msgs.slice(-200),
       model: this.dsh.getModel(),
+      permissionPreset: perm,
     });
   }
 
@@ -493,112 +497,6 @@ async function pickOpencodeSession(tree: OpencodeTreeProvider): Promise<Opencode
     { placeHolder: 'Pick an opencode session' }
   );
   return (pick as { session?: OpencodeSession } | undefined)?.session;
-}
-
-function chatHtml(): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-:root{--dsh-accent:#4d6bfe;--dsh-accent-soft:rgba(77,107,254,.14);color-scheme:dark}
-*{box-sizing:border-box}
-body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);display:flex;flex-direction:column;height:100vh}
-.dsh-top{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);position:sticky;top:0;z-index:2}
-.dsh-logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#4d6bfe,#38bdf8);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:14px;flex:none}
-.dsh-title{font-weight:700;font-size:14px;line-height:1.1}
-.dsh-sub{font-size:11px;opacity:.65}
-.dsh-pills{margin-left:auto;display:flex;gap:6px;align-items:center}
-.pill{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:20px;padding:3px 10px;opacity:.9;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);white-space:nowrap}
-.dot{width:8px;height:8px;border-radius:50%;background:#3fb950;display:inline-block}
-.dot.busy{background:#d29922;animation:pulse 1s infinite alternate}
-@keyframes pulse{from{opacity:.4}to{opacity:1}}
-.iconbtn{border:1px solid var(--vscode-panel-border);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
-.dsh-tabs{display:flex;gap:4px;padding:10px 16px 0;max-width:800px;width:100%;margin:0 auto}
-.tab{border:0;background:transparent;color:var(--vscode-foreground);opacity:.6;font-size:12px;font-weight:600;padding:6px 10px;border-bottom:2px solid transparent;cursor:pointer}
-.tab.active{opacity:1;border-bottom-color:var(--dsh-accent)}
-#ctxchip{display:none;margin:10px auto 0;max-width:800px;width:calc(100% - 32px);font-size:11px;background:var(--dsh-accent-soft);border:1px solid var(--dsh-accent);border-radius:8px;padding:6px 8px}
-#ctxchip.show{display:block}
-#ctxchip button{float:right;border:0;background:transparent;color:inherit;cursor:pointer}
-#log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;max-width:800px;width:100%;margin:0 auto}
-.day{font-size:11px;opacity:.55;text-align:center}
-.rowmsg{display:flex;gap:8px;align-items:flex-start}
-.avatar{width:24px;height:24px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
-.avatar.dsh{background:linear-gradient(135deg,#4d6bfe,#38bdf8);color:#fff}
-.avatar.user{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
-.bubble{max-width:100%;border:1px solid var(--vscode-panel-border);border-radius:12px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.55;background:var(--vscode-editor-background)}
-.rowmsg.user{flex-direction:row-reverse}
-.rowmsg.user .bubble{background:var(--dsh-accent);border-color:var(--dsh-accent);color:#fff;border-top-right-radius:4px}
-.rowmsg.dsh .bubble{border-top-left-radius:4px}
-.meta{font-size:10.5px;opacity:.6;margin-top:5px;display:flex;gap:8px}
-.meta button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:10.5px;opacity:.8}
-.meta button:hover{opacity:1;text-decoration:underline}
-.thinking{display:flex;gap:4px;align-items:center;padding:6px 2px;opacity:.8;font-size:12px}
-.thinking i{width:6px;height:6px;border-radius:50%;background:var(--dsh-accent);display:inline-block;animation:b 1s infinite}
-.thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}
-@keyframes b{0%,100%{opacity:.25}50%{opacity:1}}
-.composer{border-top:1px solid var(--vscode-panel-border);padding:12px 16px 14px;background:var(--vscode-editor-background)}
-.box{border:1px solid var(--vscode-input-border);background:var(--vscode-input-background);border-radius:12px;padding:8px;max-width:800px;margin:0 auto}
-textarea{width:100%;border:0;background:transparent;color:var(--vscode-input-foreground);resize:none;min-height:56px;max-height:200px;font-family:inherit;font-size:13px;outline:none}
-.bar{display:flex;gap:6px;align-items:center;margin-top:6px}
-.hintline{font-size:10.5px;opacity:.55}
-.send{margin-left:auto;width:32px;height:32px;border-radius:50%;border:0;background:var(--dsh-accent);color:#fff;font-size:16px;cursor:pointer;flex:none}
-.send:disabled{opacity:.4;cursor:default}
-.modelchip{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:2px 6px;opacity:.85}
-code{background:var(--vscode-textCodeBlock-background);padding:1px 4px;border-radius:4px}
-pre{background:var(--vscode-textCodeBlock-background);padding:8px;border-radius:8px;overflow:auto}
-</style></head><body>
-<div class="dsh-top">
-<div class="dsh-logo">DS</div>
-<div><div class="dsh-title">DeepSeek Harness</div><div class="dsh-sub" id="sessline">editor console · acp</div></div>
-<div class="dsh-pills"><span class="pill"><span class="dot" id="statusdot"></span> <span id="statustext">idle</span></span><button class="pill" id="modelpill" title="Setup model (provider/model + API key)">deepseek-v4</button><button class="pill" id="permpill" title="Open Settings → Permissions">workspace-write</button><button class="iconbtn" id="new">+ New</button></div>
-</div>
-<div class="dsh-tabs"><button class="tab active" id="tabchat">Chat</button><button class="tab" id="tabtraj">Trajectory</button></div>
-<div id="ctxchip"><button id="ctxx" title="Clear context">✕</button><span id="ctxtext"></span></div>
-<div id="log"><div class="day">Harness-style chat — sidebar switches sessions, history loads as transcript.</div><div class="day" id="suggest"><button class="iconbtn sug">Explain this repo</button> <button class="iconbtn sug">Fix failing tests</button> <button class="iconbtn sug">Review my diff</button></div></div>
-<div class="composer"><div class="box">
-<textarea id="in" placeholder="Ask DeepSeek Harness…  (Ctrl+Enter to send · / commands · @ references)"></textarea>
-<div class="bar"><span class="modelchip">cwd: workspace</span><span class="hintline">ACP: session/prompt · streaming updates</span><button class="send" id="send" title="Send">↑</button></div>
-</div></div>
-<script>
-const vscode = acquireVsCodeApi();
-const log = document.getElementById('log');
-const input = document.getElementById('in');
-const sendBtn = document.getElementById('send');
-const sessline = document.getElementById('sessline');
-const statusdot = document.getElementById('statusdot');
-const statustext = document.getElementById('statustext');
-const ctxchip = document.getElementById('ctxchip');
-const ctxtext = document.getElementById('ctxtext');
-let mode = 'chat';
-let busy = false;
-function setBusy(b){ busy=b; sendBtn.disabled=b; statusdot.className='dot'+(b?' busy':''); statustext.textContent=b?'running':'idle'; }
-function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-function fmt(s){ return esc(s).replace(/\`([^\`]+)\`/g,'<code>$1</code>'); }
-function bubble(side, html, meta){ const r=document.createElement('div'); r.className='rowmsg '+side; const a=document.createElement('div'); a.className='avatar '+side; a.textContent=side==='dsh'?'DS':'You'; const b=document.createElement('div'); b.className='bubble'; b.innerHTML=html; const w=document.createElement('div'); w.style.flex='1'; w.style.minWidth='0'; w.appendChild(b); if(meta){ const m=document.createElement('div'); m.className='meta'; m.innerHTML=meta; w.appendChild(m);} r.appendChild(a); r.appendChild(w); log.appendChild(r); log.scrollTop=log.scrollHeight; return b; }
-function addUser(t){ bubble('user', fmt(t), ''); }
-function addDsh(t, sid){ const m = sid?'<span>'+esc(sid)+'</span>':''; bubble('dsh', fmt(t), m+'<button data-copy="'+esc(t.slice(0,4000))+'">Copy</button>'); }
-function addThinking(){ const d=document.createElement('div'); d.className='thinking'; d.id='thinking'; d.innerHTML='<i></i><i></i><i></i> thinking (ACP session/prompt)…'; log.appendChild(d); log.scrollTop=log.scrollHeight; }
-function rmThinking(){ document.getElementById('thinking')?.remove(); }
-log.addEventListener('click', e=>{ const b=e.target.closest('button[data-copy]'); if(b){ navigator.clipboard?.writeText(b.getAttribute('data-copy')||''); b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1200);} });
-function send(){ const t=input.value; if(!t.trim()||busy) return; input.value=''; addUser(t); addThinking(); setBusy(true); vscode.postMessage({type:'prompt', text:t}); }
-sendBtn.onclick=send;
-document.getElementById('new').onclick=()=>vscode.postMessage({type:'newSession'});
-document.getElementById('modelpill').onclick=()=>vscode.postMessage({type:'modelSetup'});
-document.getElementById('permpill').onclick=()=>vscode.postMessage({type:'openSettings'});
-document.querySelectorAll('.sug').forEach(b=>b.onclick=()=>{ input.value=b.textContent||''; input.focus(); });
-document.getElementById('ctxx').onclick=()=>{ ctxchip.className=''; };
-document.getElementById('tabchat').onclick=()=>{ mode='chat'; document.getElementById('tabchat').className='tab active'; document.getElementById('tabtraj').className='tab'; };
-document.getElementById('tabtraj').onclick=()=>{ mode='traj'; document.getElementById('tabtraj').className='tab active'; document.getElementById('tabchat').className='tab'; };
-input.addEventListener('keydown', e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ send(); } });
-input.addEventListener('input', ()=>{ input.style.height='auto'; input.style.height=Math.min(200,input.scrollHeight)+'px'; });
-window.addEventListener('message', e=>{ const m=e.data;
- if(m.type==='answer'){ rmThinking(); setBusy(false); if(mode==='chat'||/tool|call|traject/i.test(m.text)) addDsh(m.text, m.sessionId); if(m.sessionId) sessline.textContent=(m.title?m.title+' · ':'')+'session '+m.sessionId; }
- if(m.type==='stream'){ rmThinking(); setBusy(true); bubble('dsh', fmt(m.text), '<span>live update</span>'); setBusy(false); }
- if(m.type==='prefill'){ input.value=m.text||''; ctxtext.textContent=m.hint||'opencode context attached'; ctxchip.className='show'; input.focus(); }
- if(m.type==='model'){ const pill=document.getElementById('modelpill'); if(pill&&m.model) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); if(m.permissionPreset){ const pp=document.getElementById('permpill'); if(pp) pp.textContent=m.permissionPreset; } }
- if(m.type==='init'){ if(m.model){ const pill=document.getElementById('modelpill'); if(pill) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); } if(m.permissionPreset){ const pp=document.getElementById('permpill'); if(pp) pp.textContent=m.permissionPreset; } if(m.sessionId){ sessline.textContent=(m.title?m.title+' · ':'')+'session '+m.sessionId; } }
- if(m.type==='session'){ log.innerHTML=''; const label=(m.title?m.title+' · ':'')+'session '+m.sessionId+(m.opencodeId?' · opencode '+m.opencodeId.slice(0,8):''); sessline.textContent=label; setBusy(false); (m.history||[]).forEach(h=>{ if(h.role==='user') addUser(h.text); else addDsh(h.text, h.sessionId||m.sessionId); }); if(!(m.history||[]).length) bubble('dsh','Switched session: '+esc(label)+'<br>Ask anything — history clicks land here now.','<span>'+esc(m.sessionId)+'</span>'); if(m.model){ const pill=document.getElementById('modelpill'); if(pill) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); } }
-});
-</script></body></html>`;
 }
 
 export function deactivate(): void {

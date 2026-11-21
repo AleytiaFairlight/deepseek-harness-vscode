@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.2
+
+- Mini-DSH console UI: Harness-style header (DS badge, session pill, model pill, idle/running status), Chat/Trajectory tabs, avatar message cards, thinking indicator, context chip for opencode sessions, DSH-like rounded composer
+- Copy buttons, live-update cards, session line in header
+
 ## 0.0.1
 
 - Initial preview: DSH Chat webview via `dsh --profile acp` (ACP stdio, `@agentclientprotocol/sdk`)

@@ -218,37 +218,104 @@ class DshChatViewProvider implements vscode.WebviewViewProvider {
   private html(): string {
     const nonce = String(Date.now().toString(36));
     return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-body{font-family:var(--vscode-font-family);padding:10px;color:var(--vscode-foreground)}
-#log{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
-.msg{border:1px solid var(--vscode-panel-border);border-radius:8px;padding:8px;white-space:pre-wrap}
-.user{background:var(--vscode-editor-inactiveSelectionBackground)}
-.dsh{background:var(--vscode-editor-background)}
-.row{display:flex;gap:6px}
-textarea{flex:1;min-height:64px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:6px;padding:6px}
-button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:0;border-radius:6px;padding:6px 10px;cursor:pointer}
-button.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
-.hint{opacity:.75;font-size:12px;margin-bottom:6px}
+:root{--dsh-accent:#4d6bfe;--dsh-accent-soft:rgba(77,107,254,.14);--dsh-card:var(--vscode-editor-background);color-scheme:dark}
+*{box-sizing:border-box}
+body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);display:flex;flex-direction:column;height:100vh}
+.dsh-top{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);position:sticky;top:0;z-index:2}
+.dsh-logo{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#4d6bfe,#38bdf8);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex:none}
+.dsh-title{font-weight:700;font-size:13px;line-height:1.1}
+.dsh-sub{font-size:11px;opacity:.65}
+.dsh-pills{margin-left:auto;display:flex;gap:6px;align-items:center}
+.pill{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:20px;padding:2px 8px;opacity:.9;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#3fb950;display:inline-block}
+.dot.busy{background:#d29922;animation:pulse 1s infinite alternate}
+@keyframes pulse{from{opacity:.4}to{opacity:1}}
+.iconbtn{border:1px solid var(--vscode-panel-border);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px}
+.dsh-tabs{display:flex;gap:4px;padding:8px 12px 0}
+.tab{border:0;background:transparent;color:var(--vscode-foreground);opacity:.6;font-size:12px;font-weight:600;padding:6px 10px;border-bottom:2px solid transparent;cursor:pointer}
+.tab.active{opacity:1;border-bottom-color:var(--dsh-accent)}
+#ctxchip{display:none;margin:8px 12px 0;font-size:11px;background:var(--dsh-accent-soft);border:1px solid var(--dsh-accent);border-radius:8px;padding:6px 8px}
+#ctxchip.show{display:block}
+#ctxchip button{float:right;border:0;background:transparent;color:inherit;cursor:pointer}
+#log{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.day{font-size:11px;opacity:.55;text-align:center}
+.rowmsg{display:flex;gap:8px;align-items:flex-start}
+.avatar{width:24px;height:24px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+.avatar.dsh{background:linear-gradient(135deg,#4d6bfe,#38bdf8);color:#fff}
+.avatar.user{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
+.bubble{max-width:100%;border:1px solid var(--vscode-panel-border);border-radius:12px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.5;background:var(--vscode-editor-background)}
+.rowmsg.user{flex-direction:row-reverse}
+.rowmsg.user .bubble{background:var(--dsh-accent);border-color:var(--dsh-accent);color:#fff;border-top-right-radius:4px}
+.rowmsg.dsh .bubble{border-top-left-radius:4px}
+.meta{font-size:10.5px;opacity:.6;margin-top:5px;display:flex;gap:8px}
+.meta button{border:0;background:transparent;color:inherit;cursor:pointer;font-size:10.5px;opacity:.8}
+.meta button:hover{opacity:1;text-decoration:underline}
+.thinking{display:flex;gap:4px;align-items:center;padding:6px 2px;opacity:.8;font-size:12px}
+.thinking i{width:6px;height:6px;border-radius:50%;background:var(--dsh-accent);display:inline-block;animation:b 1s infinite}
+.thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}
+@keyframes b{0%,100%{opacity:.25}50%{opacity:1}}
+.tool{font-size:11px;border:1px dashed var(--vscode-panel-border);border-radius:8px;padding:6px 8px;opacity:.9;background:var(--vscode-editor-inactiveSelectionBackground)}
+.composer{border-top:1px solid var(--vscode-panel-border);padding:10px 12px 12px;background:var(--vscode-sideBar-background)}
+.box{border:1px solid var(--vscode-input-border);background:var(--vscode-input-background);border-radius:12px;padding:8px}
+textarea{width:100%;border:0;background:transparent;color:var(--vscode-input-foreground);resize:none;min-height:56px;max-height:160px;font-family:inherit;font-size:12.5px;outline:none}
+.bar{display:flex;gap:6px;align-items:center;margin-top:6px}
+.hintline{font-size:10.5px;opacity:.55}
+.send{margin-left:auto;width:30px;height:30px;border-radius:50%;border:0;background:var(--dsh-accent);color:#fff;font-size:15px;cursor:pointer;flex:none}
+.send:disabled{opacity:.4;cursor:default}
+.modelchip{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:2px 6px;opacity:.85}
+code{background:var(--vscode-textCodeBlock-background);padding:1px 4px;border-radius:4px}
+pre{background:var(--vscode-textCodeBlock-background);padding:8px;border-radius:8px;overflow:auto}
 </style></head><body>
-<div class="hint" id="hint">DSH chat via <code>dsh --profile acp</code>. Use “Send opencode Session to DSH” from the opencode History view to attach past context.</div>
-<div id="log"></div>
-<div class="row"><textarea id="in" placeholder="Ask DeepSeek Harness…"></textarea></div>
-<div class="row" style="margin-top:6px"><button id="send">Send</button><button id="new" class="secondary">New session</button></div>
+<div class="dsh-top">
+<div class="dsh-logo">DS</div>
+<div><div class="dsh-title">DeepSeek Harness</div><div class="dsh-sub" id="sessline">mini console · acp</div></div>
+<div class="dsh-pills"><span class="pill"><span class="dot" id="statusdot"></span> <span id="statustext">idle</span></span><span class="pill" id="modelpill">deepseek-v4</span><button class="iconbtn" id="new">+ New</button></div>
+</div>
+<div class="dsh-tabs"><button class="tab active" id="tabchat">Chat</button><button class="tab" id="tabtraj">Trajectory</button></div>
+<div id="ctxchip"><button id="ctxx" title="Clear context">✕</button><span id="ctxtext"></span></div>
+<div id="log"><div class="day">This is a mini DeepSeek Harness console. Use “Send opencode Session to DSH” to attach history.</div></div>
+<div class="composer"><div class="box">
+<textarea id="in" placeholder="Ask DeepSeek Harness…  (Ctrl+Enter to send · / commands · @ references)"></textarea>
+<div class="bar"><span class="modelchip" id="cwdchip">cwd: workspace</span><span class="hintline">ACP: session/prompt · streaming updates</span><button class="send" id="send" title="Send">↑</button></div>
+</div></div>
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 const log = document.getElementById('log');
 const input = document.getElementById('in');
-function add(cls, text){ const d=document.createElement('div'); d.className='msg '+cls; d.textContent=text; log.appendChild(d); log.scrollTop=log.scrollHeight; }
-document.getElementById('send').onclick=()=>{ const t=input.value; input.value=''; vscode.postMessage({type:'prompt', text:t}); };
+const sendBtn = document.getElementById('send');
+const sessline = document.getElementById('sessline');
+const statusdot = document.getElementById('statusdot');
+const statustext = document.getElementById('statustext');
+const ctxchip = document.getElementById('ctxchip');
+const ctxtext = document.getElementById('ctxtext');
+let mode = 'chat';
+let busy = false;
+function setBusy(b){ busy=b; sendBtn.disabled=b; statusdot.className='dot'+(b?' busy':''); statustext.textContent=b?'running':'idle'; }
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+function fmt(s){ return esc(s).replace(/\`([^\`]+)\`/g,'<code>$1</code>'); }
+function bubble(side, html, meta){ const r=document.createElement('div'); r.className='rowmsg '+side; const a=document.createElement('div'); a.className='avatar '+side; a.textContent=side==='dsh'?'DS':'You'; const b=document.createElement('div'); b.className='bubble'; b.innerHTML=html; const w=document.createElement('div'); w.style.flex='1'; w.style.minWidth='0'; w.appendChild(b); if(meta){ const m=document.createElement('div'); m.className='meta'; m.innerHTML=meta; w.appendChild(m);} r.appendChild(a); r.appendChild(w); log.appendChild(r); log.scrollTop=log.scrollHeight; return b; }
+function addUser(t){ bubble('user', fmt(t), ''); }
+function addDsh(t, sid){ const m = sid?'<span>'+esc(sid)+'</span>':''; bubble('dsh', fmt(t), m+'<button data-copy="'+esc(t.slice(0,4000))+'">Copy</button>'); }
+function addThinking(){ const d=document.createElement('div'); d.className='thinking'; d.id='thinking'; d.innerHTML='<i></i><i></i><i></i> thinking (ACP session/prompt)…'; log.appendChild(d); log.scrollTop=log.scrollHeight; }
+function rmThinking(){ document.getElementById('thinking')?.remove(); }
+log.addEventListener('click', e=>{ const b=e.target.closest('button[data-copy]'); if(b){ navigator.clipboard?.writeText(b.getAttribute('data-copy')||''); b.textContent='Copied'; setTimeout(()=>b.textContent='Copy',1200);} });
+function send(){ const t=input.value; if(!t.trim()||busy) return; input.value=''; addUser(t); addThinking(); setBusy(true); vscode.postMessage({type:'prompt', text:t}); }
+sendBtn.onclick=send;
 document.getElementById('new').onclick=()=>vscode.postMessage({type:'newSession'});
-input.addEventListener('keydown', e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ document.getElementById('send').click(); } });
+document.getElementById('ctxx').onclick=()=>{ ctxchip.className=''; };
+document.getElementById('tabchat').onclick=e=>{ mode='chat'; document.getElementById('tabchat').className='tab active'; document.getElementById('tabtraj').className='tab'; };
+document.getElementById('tabtraj').onclick=e=>{ mode='traj'; document.getElementById('tabtraj').className='tab active'; document.getElementById('tabchat').className='tab'; };
+input.addEventListener('keydown', e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ send(); } });
+input.addEventListener('input', ()=>{ input.style.height='auto'; input.style.height=Math.min(160,input.scrollHeight)+'px'; });
 window.addEventListener('message', e=>{ const m=e.data;
- if(m.type==='user') add('user', m.text);
- if(m.type==='answer') add('dsh', (m.sessionId?('['+m.sessionId+']\\n'):'')+m.text);
- if(m.type==='stream') add('dsh', m.text);
- if(m.type==='thinking') add('dsh', '…thinking (ACP session/prompt)…');
- if(m.type==='prefill'){ input.value=m.text||''; document.getElementById('hint').textContent=m.hint||''; }
- if(m.type==='session'){ log.innerHTML=''; add('dsh','New DSH session: '+m.sessionId); }
+ if(m.type==='user'){ /* already rendered optimistically */ }
+ if(m.type==='answer'){ rmThinking(); setBusy(false); if(mode==='chat'||/tool|call|traject/i.test(m.text)) addDsh(m.text, m.sessionId); if(m.sessionId) sessline.textContent='session '+m.sessionId; }
+ if(m.type==='stream'){ rmThinking(); setBusy(true); bubble('dsh', fmt(m.text), '<span>live update</span>'); setBusy(false); }
+ if(m.type==='thinking'){ /* already shown */ }
+ if(m.type==='prefill'){ input.value=m.text||''; ctxtext.textContent=m.hint||'opencode context attached'; ctxchip.className='show'; input.focus(); }
+ if(m.type==='session'){ log.innerHTML=''; sessline.textContent='session '+m.sessionId; setBusy(false); bubble('dsh','New DSH session started.<br>Ask anything — this mini console mirrors the Harness chat flow.','<span>'+esc(m.sessionId)+'</span>'); }
 });
 </script></body></html>`;
   }

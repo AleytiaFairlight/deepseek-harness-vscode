@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.8
+
+- History click no longer opens an editable file: it loads the transcript directly into the editor chat as bubbles; transcript file is now opt-in via right-click → Open Transcript (read-only preview)
+- Sessions sidebar fixed: local session registry (new/switch remembered) merged with ACP list; empty state shows “No DSH sessions — click to start one” so the view is never blank
+
 ## 0.0.7
 
 - Harness-accurate Models: DeepSeek key card, shipped provider picker (anthropic/openai/moonshotai/zai/gemini/groq/openrouter/opencode-gateway/custom), API key write-only with show/hide + env hints, custom API form (Provider ID/base URL/protocol/models) — latest Harness is 0.2.2-rc.5, same as yours

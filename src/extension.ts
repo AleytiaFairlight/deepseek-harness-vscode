@@ -118,7 +118,16 @@ function getAliases(context: vscode.ExtensionContext): Record<string, string> {
   return context.globalState.get<Record<string, string>>('dshSessionTitles', {});
 }
 
-class DshSessionProvider implements vscode.TreeDataProvider<DshSessionItem> {
+function getKnownSessions(context: vscode.ExtensionContext): string[] {
+  return context.globalState.get<string[]>('dsh.sessionList', []);
+}
+
+async function rememberSession(context: vscode.ExtensionContext, sessionId: string): Promise<void> {
+  const list = getKnownSessions(context);
+  if (!list.includes(sessionId)) await context.globalState.update('dsh.sessionList', [sessionId, ...list].slice(0, 50));
+}
+
+class DshSessionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private change = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.change.event;
 
@@ -128,7 +137,7 @@ class DshSessionProvider implements vscode.TreeDataProvider<DshSessionItem> {
     this.change.fire();
   }
 
-  getTreeItem(el: DshSessionItem): vscode.TreeItem {
+  getTreeItem(el: vscode.TreeItem): vscode.TreeItem {
     return el;
   }
 
@@ -136,20 +145,27 @@ class DshSessionProvider implements vscode.TreeDataProvider<DshSessionItem> {
     return getAliases(this.context)[id];
   }
 
-  async getChildren(): Promise<DshSessionItem[]> {
+  async getChildren(): Promise<vscode.TreeItem[]> {
+    let server: { sessionId: string; title?: string }[] = [];
     try {
-      const sessions = await this.dsh.listSessions();
-      const active = this.dsh.activeSessionId;
-      const titleOf = (sid: string, t?: string) => this.alias(sid) ?? t ?? sid;
-      if (!sessions.length && active) return [new DshSessionItem(active, titleOf(active, 'current'), true)];
-      return sessions.map((s) => new DshSessionItem(s.sessionId, titleOf(s.sessionId, s.title), s.sessionId === active));
+      server = await this.dsh.listSessions();
     } catch (e) {
       this.output.appendLine(`[dsh] sessions read failed: ${(e as Error).message}`);
-      const active = this.dsh.activeSessionId;
-      if (!active) return [];
-      const aliases = getAliases(this.context);
-      return [new DshSessionItem(active, aliases[active] ?? 'current', true)];
     }
+    const active = this.dsh.activeSessionId;
+    const known = getKnownSessions(this.context);
+    const ids = new Map<string, string | undefined>();
+    for (const s of server) ids.set(s.sessionId, s.title);
+    for (const id of known) if (!ids.has(id)) ids.set(id, undefined);
+    if (active && !ids.has(active)) ids.set(active, 'current');
+    if (!ids.size) {
+      const empty = new vscode.TreeItem('No DSH sessions — click to start one', vscode.TreeItemCollapsibleState.None);
+      empty.command = { command: 'deepseekHarness.newDshSession', title: 'New DSH Session' };
+      empty.iconPath = new vscode.ThemeIcon('add');
+      return [empty];
+    }
+    const titleOf = (sid: string, t?: string) => this.alias(sid) ?? t ?? sid;
+    return [...ids.entries()].map(([sid, t]) => new DshSessionItem(sid, titleOf(sid, t), sid === active));
   }
 }
 
@@ -296,15 +312,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('deepseekHarness.refreshSessions', () => sessionTree.refresh()),
     vscode.commands.registerCommand('deepseekHarness.newDshSession', async () => {
       const id = await dsh.newSession();
+      await rememberSession(context, id);
       sessionTree.refresh();
       const aliases = getAliases(context);
       chat.setSession(id, aliases[id]);
-      void vscode.window.showInformationMessage(`DeepSeek Harness: new session ${id} (chat in editor)`);
+      chat.pushModel();
     }),
     vscode.commands.registerCommand('deepseekHarness.selectDshSession', async (sessionId?: unknown) => {
       const id = typeof sessionId === 'string' ? sessionId : undefined;
       if (!id) return;
       await dsh.switchTo(id);
+      await rememberSession(context, id);
       sessionTree.refresh();
       const aliases = getAliases(context);
       chat.setSession(id, aliases[id]);
@@ -396,6 +414,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(`DSH model: ${providerId}/${modelId} (key: ${savedKey || keyInput.trim() ? 'saved/env' : 'env-only'})`);
     }),
     vscode.commands.registerCommand('deepseekHarness.openOpencodeSession', async (arg?: unknown) => {
+      // Click = load into the editor chat as transcript. No editable file is opened.
       const session = unwrapSession(arg) ?? (await pickOpencodeSession(opencodeTree));
       if (!session) {
         void vscode.window.showWarningMessage('No opencode session selected.');
@@ -403,19 +422,31 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       try {
         const raw = await readCurrentOpencodeMessages(session.id);
-        // Load as chat transcript, not as a prompt draft.
         const msgs: ChatMsg[] = raw.map((m) => ({
           role: /user/i.test(m.role) ? 'user' : 'dsh',
           text: m.text,
         }));
         chat.loadOpencodeAsChat(session, msgs);
-        // Also open the transcript file beside the chat for reference (non-blocking).
-        try {
-          await openSessionDoc(session);
-        } catch { /* chat already loaded; file is optional */ }
         sessionTree.refresh();
       } catch (e) {
         void vscode.window.showErrorMessage(`Open opencode session failed: ${(e as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand('deepseekHarness.openOpencodeFile', async (arg?: unknown) => {
+      // Explicit opt-in: open a read-only preview of the transcript (no editing).
+      const session = unwrapSession(arg) ?? (await pickOpencodeSession(opencodeTree));
+      if (!session) return;
+      try {
+        const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
+        const { path: dbPath } = resolveOpencodeDbPath(override);
+        const messages = await readOpencodeSessionMessages(dbPath, session.id, 200);
+        const doc = await vscode.workspace.openTextDocument({
+          content: `# ${session.title} (read-only preview — use chat for follow-ups)\n\n> id: ${session.id}\n\n${messages.map((m) => `## ${m.role}\n\n${m.text}`).join('\n\n')}`,
+          language: 'markdown',
+        });
+        await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+      } catch (e) {
+        void vscode.window.showErrorMessage(`Open transcript file failed: ${(e as Error).message}`);
       }
     }),
     vscode.commands.registerCommand('deepseekHarness.sendOpencodeToDsh', async (arg?: unknown) => {

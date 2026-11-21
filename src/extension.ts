@@ -24,7 +24,9 @@ class OpencodeTreeProvider implements vscode.TreeDataProvider<OpencodeItem> {
     return el;
   }
 
-  async getChildren(): Promise<OpencodeItem[]> {
+  async getChildren(element?: OpencodeItem): Promise<OpencodeItem[]> {
+    if (element?.children) return element.children;
+    if (element?.session) return [];
     const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
     const { path: dbPath, source } = resolveOpencodeDbPath(override);
     if (!dbPath) {
@@ -62,19 +64,45 @@ class OpencodeItem extends vscode.TreeItem {
   session?: OpencodeSession;
   constructor(label: string, state: vscode.TreeItemCollapsibleState, session?: OpencodeSession) {
     super(label, state);
+    this.id = session ? `ses-${session.id}` : `grp-${label}`;
     this.session = session;
     if (session) {
       this.description = session.directory;
       this.tooltip = `${session.title}\n${session.id}${session.directory ? `\n${session.directory}` : ''}`;
       this.command = { command: 'deepseekHarness.openOpencodeSession', title: 'Open opencode Session', arguments: [session] };
       this.contextValue = 'opencodeSession';
+    } else if (state !== vscode.TreeItemCollapsibleState.None) {
+      this.contextValue = 'opencodeGroup';
     }
   }
+}
+
+function unwrapSession(arg: unknown): OpencodeSession | undefined {
+  if (!arg || typeof arg !== 'object') return undefined;
+  const o = arg as Record<string, unknown>;
+  if (o.session && typeof o.session === 'object') return o.session as OpencodeSession;
+  if (typeof o.id === 'string' && typeof o.title === 'string') return o as unknown as OpencodeSession;
+  return undefined;
 }
 
 function sessionLabel(s: OpencodeSession): string {
   const date = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '';
   return `${s.title}${date ? ` — ${date}` : ''}`;
+}
+
+async function openSessionDoc(session: OpencodeSession): Promise<void> {
+  const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
+  const { path: dbPath } = resolveOpencodeDbPath(override);
+  try {
+    const messages = await readOpencodeSessionMessages(dbPath, session.id, 200);
+    const doc = await vscode.workspace.openTextDocument({
+      content: `# ${session.title}\n\n> id: ${session.id}${session.directory ? `\n> directory: ${session.directory}` : ''}${session.projectName ? `\n> project: ${session.projectName}` : ''}\n\n${messages.map((m) => `## ${m.role}\n\n${m.text}`).join('\n\n')}`,
+      language: 'markdown',
+    });
+    await vscode.window.showTextDocument(doc, { preview: false });
+  } catch (e) {
+    void vscode.window.showErrorMessage(`opencode read failed: ${(e as Error).message}`);
+  }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -106,24 +134,33 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showInformationMessage(`DeepSeek Harness: new session ${id}`);
       chatProvider.setSession(id);
     }),
-    vscode.commands.registerCommand('deepseekHarness.openOpencodeSession', async (session?: OpencodeSession) => {
-      if (!session) return;
-      const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
-      const { path: dbPath } = resolveOpencodeDbPath(override);
-      try {
-        const messages = await readOpencodeSessionMessages(dbPath, session.id, 200);
-        const doc = await vscode.workspace.openTextDocument({
-          content: `# ${session.title}\n\n${messages.map((m) => `## ${m.role}\n\n${m.text}`).join('\n\n')}`,
-          language: 'markdown',
-        });
-        await vscode.window.showTextDocument(doc, { preview: true });
-      } catch (e) {
-        void vscode.window.showErrorMessage(`opencode read failed: ${(e as Error).message}`);
+    vscode.commands.registerCommand('deepseekHarness.openOpencodeSession', async (arg?: unknown) => {
+      const session = unwrapSession(arg);
+      if (!session) {
+        // Clicked a group header or invoked without args: expand groups instead of no-op.
+        const items = await tree.getChildren();
+        const flat: OpencodeSession[] = [];
+        for (const it of items) {
+          if (it.session) flat.push(it.session);
+          for (const c of it.children ?? []) if (c.session) flat.push(c.session);
+        }
+        if (!flat.length) {
+          void vscode.window.showWarningMessage('No opencode session selected.');
+          return;
+        }
+        const pick = await vscode.window.showQuickPick(
+          flat.map((s) => ({ label: sessionLabel(s), description: s.directory, session: s })),
+          { placeHolder: 'Pick an opencode session to open' }
+        );
+        if (!pick) return;
+        await openSessionDoc(pick.session);
+        return;
       }
+      await openSessionDoc(session);
     }),
-    vscode.commands.registerCommand('deepseekHarness.sendOpencodeToDsh', async (session?: OpencodeSession) => {
+    vscode.commands.registerCommand('deepseekHarness.sendOpencodeToDsh', async (arg?: unknown) => {
       const target: OpencodeSession | undefined =
-        session ?? (await pickOpencodeSessionFromTree(tree));
+        unwrapSession(arg) ?? (await pickOpencodeSessionFromTree(tree));
       if (!target) {
         void vscode.window.showWarningMessage('No opencode session selected.');
         return;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.3
+
+- Click-to-open fixed: tree provider now implements `getChildren(element)` so grouped history expands; session rows carry stable ids and fire `openOpencodeSession` on single click
+- Robust command args: accepts TreeItem or session payload, falls back to quick-pick for groups/palette; opens full session doc (title, id, directory, project + 200 messages) in a non-preview editor
+- Right-click/inline actions for opencode rows (Open + Send to DSH), title-bar Refresh
+
 ## 0.0.2
 
 - Mini-DSH console UI: Harness-style header (DS badge, session pill, model pill, idle/running status), Chat/Trajectory tabs, avatar message cards, thinking indicator, context chip for opencode sessions, DSH-like rounded composer

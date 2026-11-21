@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
@@ -72,6 +72,27 @@
         "title": "Open DSH Chat"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "deepseekHarness.refreshOpencode",
+          "when": "view == deepseekHarness.opencodeHistory",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "deepseekHarness.openOpencodeSession",
+          "when": "view == deepseekHarness.opencodeHistory && viewItem == opencodeSession",
+          "group": "inline"
+        },
+        {
+          "command": "deepseekHarness.sendOpencodeToDsh",
+          "when": "view == deepseekHarness.opencodeHistory && viewItem == opencodeSession",
+          "group": "inline"
+        }
+      ]
+    },
     "configuration": {
       "title": "DeepSeek Harness",
       "properties": {

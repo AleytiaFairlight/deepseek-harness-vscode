@@ -8,11 +8,11 @@ import {
   type OpencodeSession,
 } from './opencodeHistory';
 
+// ---------- opencode history (sidebar) ----------
+
 class OpencodeTreeProvider implements vscode.TreeDataProvider<OpencodeItem> {
   private change = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.change.event;
-  private cache: OpencodeSession[] = [];
-  private error?: string;
 
   constructor(private output: vscode.OutputChannel) {}
 
@@ -30,30 +30,28 @@ class OpencodeTreeProvider implements vscode.TreeDataProvider<OpencodeItem> {
     const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
     const { path: dbPath, source } = resolveOpencodeDbPath(override);
     if (!dbPath) {
-      this.error = 'OPENCODE_DB=:memory: — history is ephemeral.';
       return [new OpencodeItem('No persistent history (in-memory DB)', vscode.TreeItemCollapsibleState.None)];
     }
     try {
-      this.cache = await listOpencodeSessions(dbPath, 100);
-      if (!this.cache.length) return [new OpencodeItem('(no opencode sessions found)', vscode.TreeItemCollapsibleState.None)];
-      this.output.appendLine(`[opencode] ${this.cache.length} sessions from ${dbPath} (${source})`);
+      const sessions = await listOpencodeSessions(dbPath, 100);
+      if (!sessions.length) return [new OpencodeItem('(no opencode sessions found)', vscode.TreeItemCollapsibleState.None)];
+      this.output.appendLine(`[opencode] ${sessions.length} sessions from ${dbPath} (${source})`);
       const groups = new Map<string, OpencodeSession[]>();
-      for (const s of this.cache) {
+      for (const s of sessions) {
         const key = s.projectName || s.directory || 'other';
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key)!.push(s);
       }
-      if (groups.size <= 1) return this.cache.map((s) => new OpencodeItem(sessionLabel(s), vscode.TreeItemCollapsibleState.None, s));
+      if (groups.size <= 1) return sessions.map((s) => new OpencodeItem(sessionLabel(s), vscode.TreeItemCollapsibleState.None, s));
       const out: OpencodeItem[] = [];
-      for (const [name, sessions] of groups) {
+      for (const [name, list] of groups) {
         const group = new OpencodeItem(name, vscode.TreeItemCollapsibleState.Collapsed);
-        group.children = sessions.map((s) => new OpencodeItem(sessionLabel(s), vscode.TreeItemCollapsibleState.None, s));
+        group.children = list.map((s) => new OpencodeItem(sessionLabel(s), vscode.TreeItemCollapsibleState.None, s));
         out.push(group);
       }
       return out;
     } catch (e) {
-      this.error = (e as Error).message;
-      this.output.appendLine(`[opencode] read failed: ${this.error}`);
+      this.output.appendLine(`[opencode] read failed: ${(e as Error).message}`);
       return [new OpencodeItem('opencode history unavailable — see Output', vscode.TreeItemCollapsibleState.None)];
     }
   }
@@ -93,15 +91,126 @@ function sessionLabel(s: OpencodeSession): string {
 async function openSessionDoc(session: OpencodeSession): Promise<void> {
   const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
   const { path: dbPath } = resolveOpencodeDbPath(override);
-  try {
-    const messages = await readOpencodeSessionMessages(dbPath, session.id, 200);
-    const doc = await vscode.workspace.openTextDocument({
-      content: `# ${session.title}\n\n> id: ${session.id}${session.directory ? `\n> directory: ${session.directory}` : ''}${session.projectName ? `\n> project: ${session.projectName}` : ''}\n\n${messages.map((m) => `## ${m.role}\n\n${m.text}`).join('\n\n')}`,
-      language: 'markdown',
+  const messages = await readOpencodeSessionMessages(dbPath, session.id, 200);
+  const doc = await vscode.workspace.openTextDocument({
+    content: `# ${session.title}\n\n> id: ${session.id}${session.directory ? `\n> directory: ${session.directory}` : ''}${session.projectName ? `\n> project: ${session.projectName}` : ''}\n\n${messages.map((m) => `## ${m.role}\n\n${m.text}`).join('\n\n')}`,
+    language: 'markdown',
+  });
+  await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+}
+
+// ---------- DSH sessions (sidebar) ----------
+
+class DshSessionItem extends vscode.TreeItem {
+  constructor(public sessionId: string, public title: string | undefined, active: boolean) {
+    super(active ? `● ${sessionId}` : sessionId, vscode.TreeItemCollapsibleState.None);
+    this.id = `dsh-${sessionId}`;
+    this.description = title;
+    this.tooltip = active ? `Active DSH session\n${sessionId}` : `DSH session\n${sessionId}\nClick to switch`;
+    this.command = { command: 'deepseekHarness.selectDshSession', title: 'Switch to DSH Session', arguments: [sessionId] };
+    this.contextValue = 'dshSession';
+    this.iconPath = new vscode.ThemeIcon(active ? 'comment-pinned' : 'comment');
+  }
+}
+
+class DshSessionProvider implements vscode.TreeDataProvider<DshSessionItem> {
+  private change = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this.change.event;
+
+  constructor(private dsh: DshAcp, private output: vscode.OutputChannel) {}
+
+  refresh(): void {
+    this.change.fire();
+  }
+
+  getTreeItem(el: DshSessionItem): vscode.TreeItem {
+    return el;
+  }
+
+  async getChildren(): Promise<DshSessionItem[]> {
+    try {
+      const sessions = await this.dsh.listSessions();
+      const active = this.dsh.activeSessionId;
+      if (!sessions.length && active) return [new DshSessionItem(active, 'current', true)];
+      return sessions.map((s) => new DshSessionItem(s.sessionId, s.title, s.sessionId === active));
+    } catch (e) {
+      this.output.appendLine(`[dsh] sessions read failed: ${(e as Error).message}`);
+      const active = this.dsh.activeSessionId;
+      return active ? [new DshSessionItem(active, 'current', true)] : [];
+    }
+  }
+}
+
+// ---------- Main chat in the editor ----------
+
+type ChatMsg = { role: 'user' | 'dsh'; text: string; sessionId?: string };
+
+class ChatEditorManager {
+  private panel?: vscode.WebviewPanel;
+  private transcripts = new Map<string, ChatMsg[]>();
+
+  constructor(private context: vscode.ExtensionContext, private output: vscode.OutputChannel, private dsh: DshAcp) {
+    dsh.onStreamingUpdate((text) => {
+      if (text) void this.panel?.webview.postMessage({ type: 'stream', text });
     });
-    await vscode.window.showTextDocument(doc, { preview: false });
-  } catch (e) {
-    void vscode.window.showErrorMessage(`opencode read failed: ${(e as Error).message}`);
+  }
+
+  open(): vscode.WebviewPanel {
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.Active);
+      return this.panel;
+    }
+    const panel = vscode.window.createWebviewPanel('deepseekHarness.chatEditor', 'DSH Chat', vscode.ViewColumn.Active, {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    });
+    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icon.svg');
+    panel.webview.html = chatHtml();
+    panel.onDidDispose(() => {
+      this.panel = undefined;
+    });
+    panel.webview.onDidReceiveMessage(async (msg) => {
+      if (msg?.type === 'prompt') {
+        const text: string = String(msg.text ?? '');
+        if (!text.trim()) return;
+        const sid = this.dsh.activeSessionId ?? (await this.dsh.ensureSession());
+        this.append(sid, { role: 'user', text });
+        void panel.webview.postMessage({ type: 'user', text });
+        void panel.webview.postMessage({ type: 'thinking' });
+        try {
+          const res = await this.dsh.prompt(text);
+          this.append(res.sessionId, { role: 'dsh', text: res.text, sessionId: res.sessionId });
+          void panel.webview.postMessage({ type: 'answer', text: res.text, sessionId: res.sessionId });
+        } catch (e) {
+          const err = `DSH request failed: ${(e as Error).message}`;
+          this.output.appendLine(`[dsh] ${err}`);
+          void panel.webview.postMessage({ type: 'answer', text: err });
+        }
+      }
+      if (msg?.type === 'newSession') {
+        const id = await this.dsh.newSession();
+        this.setSession(id);
+      }
+    });
+    this.panel = panel;
+    const active = this.dsh.activeSessionId;
+    if (active) void panel.webview.postMessage({ type: 'session', sessionId: active, history: this.transcripts.get(active) ?? [] });
+    return panel;
+  }
+
+  private append(sessionId: string, msg: ChatMsg): void {
+    const list = this.transcripts.get(sessionId) ?? [];
+    list.push(msg);
+    this.transcripts.set(sessionId, list.slice(-200));
+  }
+
+  setSession(id: string): void {
+    void this.open().webview.postMessage({ type: 'session', sessionId: id, history: this.transcripts.get(id) ?? [] });
+  }
+
+  async sendContextAndPrompt(prefix: string, session: OpencodeSession): Promise<void> {
+    this.open();
+    void this.panel?.webview.postMessage({ type: 'prefill', text: prefix, hint: `Context loaded: ${session.title}` });
   }
 }
 
@@ -111,67 +220,78 @@ export function activate(context: vscode.ExtensionContext): void {
   const dsh = new DshAcp(output);
   context.subscriptions.push({ dispose: () => dsh.dispose() });
 
-  const tree = new OpencodeTreeProvider(output);
+  const opencodeTree = new OpencodeTreeProvider(output);
+  const sessionTree = new DshSessionProvider(dsh, output);
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('deepseekHarness.opencodeHistory', tree)
+    vscode.window.registerTreeDataProvider('deepseekHarness.opencodeHistory', opencodeTree),
+    vscode.window.registerTreeDataProvider('deepseekHarness.sessions', sessionTree)
   );
 
-  // Chat webview
-  const chatProvider = new DshChatViewProvider(context, output, dsh);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('deepseekHarness.chat', chatProvider, {
-      webviewOptions: { retainContextWhenHidden: true },
-    })
-  );
+  const chat = new ChatEditorManager(context, output, dsh);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('deepseekHarness.refreshOpencode', () => tree.refresh()),
-    vscode.commands.registerCommand('deepseekHarness.openDshChat', async () => {
-      await vscode.commands.executeCommand('deepseekHarness.chat.focus');
+    vscode.commands.registerCommand('deepseekHarness.openChatEditor', async () => {
+      chat.open();
     }),
+    vscode.commands.registerCommand('deepseekHarness.openDshChat', async () => {
+      chat.open();
+    }),
+    vscode.commands.registerCommand('deepseekHarness.refreshOpencode', () => opencodeTree.refresh()),
+    vscode.commands.registerCommand('deepseekHarness.refreshSessions', () => sessionTree.refresh()),
     vscode.commands.registerCommand('deepseekHarness.newDshSession', async () => {
       const id = await dsh.newSession();
-      void vscode.window.showInformationMessage(`DeepSeek Harness: new session ${id}`);
-      chatProvider.setSession(id);
+      sessionTree.refresh();
+      chat.setSession(id);
+      void vscode.window.showInformationMessage(`DeepSeek Harness: new session ${id} (chat in editor)`);
+    }),
+    vscode.commands.registerCommand('deepseekHarness.selectDshSession', async (sessionId?: unknown) => {
+      const id = typeof sessionId === 'string' ? sessionId : undefined;
+      if (!id) return;
+      await dsh.switchTo(id);
+      sessionTree.refresh();
+      chat.setSession(id);
     }),
     vscode.commands.registerCommand('deepseekHarness.openOpencodeSession', async (arg?: unknown) => {
-      const session = unwrapSession(arg);
+      const session = unwrapSession(arg) ?? (await pickOpencodeSession(opencodeTree));
       if (!session) {
-        // Clicked a group header or invoked without args: expand groups instead of no-op.
-        const items = await tree.getChildren();
-        const flat: OpencodeSession[] = [];
-        for (const it of items) {
-          if (it.session) flat.push(it.session);
-          for (const c of it.children ?? []) if (c.session) flat.push(c.session);
-        }
-        if (!flat.length) {
-          void vscode.window.showWarningMessage('No opencode session selected.');
-          return;
-        }
-        const pick = await vscode.window.showQuickPick(
-          flat.map((s) => ({ label: sessionLabel(s), description: s.directory, session: s })),
-          { placeHolder: 'Pick an opencode session to open' }
-        );
-        if (!pick) return;
-        await openSessionDoc(pick.session);
+        void vscode.window.showWarningMessage('No opencode session selected.');
         return;
       }
-      await openSessionDoc(session);
+      // 1) Open the transcript file…
+      try {
+        await openSessionDoc(session);
+      } catch (e) {
+        void vscode.window.showErrorMessage(`opencode read failed: ${(e as Error).message}`);
+        return;
+      }
+      // 2) …and switch the editor chat to it (file alone is not enough).
+      try {
+        const messages = await readCurrentOpencodeMessages(session.id);
+        const contextText = formatSessionForDsh(session, messages);
+        const sid = dsh.activeSessionId ?? (await dsh.ensureSession());
+        sessionTree.refresh();
+        chat.setSession(sid);
+        await chat.sendContextAndPrompt(
+          `Here is past opencode session "${session.title}" for reference:\n\n${contextText}\n\n---\nContinue / answer based on it: `,
+          session
+        );
+      } catch (e) {
+        void vscode.window.showErrorMessage(`Switch chat to opencode session failed: ${(e as Error).message}`);
+      }
     }),
     vscode.commands.registerCommand('deepseekHarness.sendOpencodeToDsh', async (arg?: unknown) => {
-      const target: OpencodeSession | undefined =
-        unwrapSession(arg) ?? (await pickOpencodeSessionFromTree(tree));
+      const target = unwrapSession(arg) ?? (await pickOpencodeSession(opencodeTree));
       if (!target) {
         void vscode.window.showWarningMessage('No opencode session selected.');
         return;
       }
-      const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
-      const { path: dbPath } = resolveOpencodeDbPath(override);
       try {
-        const messages = await readOpencodeSessionMessages(dbPath, target.id, 120);
+        const messages = await readCurrentOpencodeMessages(target.id);
         const contextText = formatSessionForDsh(target, messages);
-        await vscode.commands.executeCommand('deepseekHarness.chat.focus');
-        await chatProvider.sendContextAndPrompt(
+        const sid = dsh.activeSessionId ?? (await dsh.ensureSession());
+        sessionTree.refresh();
+        chat.setSession(sid);
+        await chat.sendContextAndPrompt(
           `Here is a past opencode session for reference:\n\n${contextText}\n\n---\nContinue / answer based on it: `,
           target
         );
@@ -181,10 +301,16 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  output.appendLine('[dsh] extension activated. Configure deepseekHarness.cliPath if dsh is not on PATH.');
+  output.appendLine('[dsh] extension activated. Sidebar = sessions + history; main chat opens in the editor.');
 }
 
-async function pickOpencodeSessionFromTree(tree: OpencodeTreeProvider): Promise<OpencodeSession | undefined> {
+async function readCurrentOpencodeMessages(sessionId: string) {
+  const override = vscode.workspace.getConfiguration('deepseekHarness').get<string>('opencodeDbPath', '');
+  const { path: dbPath } = resolveOpencodeDbPath(override);
+  return readOpencodeSessionMessages(dbPath, sessionId, 120);
+}
+
+async function pickOpencodeSession(tree: OpencodeTreeProvider): Promise<OpencodeSession | undefined> {
   const items = await tree.getChildren();
   const flat: OpencodeSession[] = [];
   for (const it of items) {
@@ -194,95 +320,41 @@ async function pickOpencodeSessionFromTree(tree: OpencodeTreeProvider): Promise<
   if (!flat.length) return undefined;
   const pick = await vscode.window.showQuickPick(
     flat.map((s) => ({ label: sessionLabel(s), description: s.directory, session: s })),
-    { placeHolder: 'Pick an opencode session to send to DSH' }
+    { placeHolder: 'Pick an opencode session' }
   );
   return (pick as { session?: OpencodeSession } | undefined)?.session;
 }
 
-class DshChatViewProvider implements vscode.WebviewViewProvider {
-  private view?: vscode.WebviewView;
-  private history: { role: 'user' | 'dsh'; text: string }[] = [];
-  private pendingContext = '';
-
-  constructor(
-    private context: vscode.ExtensionContext,
-    private output: vscode.OutputChannel,
-    private dsh: DshAcp
-  ) {
-    dsh.onStreamingUpdate((text) => {
-      if (text) void this.view?.webview.postMessage({ type: 'stream', text });
-    });
-  }
-
-  setSession(id: string): void {
-    this.history = [];
-    void this.view?.webview.postMessage({ type: 'session', sessionId: id });
-  }
-
-  async sendContextAndPrompt(prefix: string, session: OpencodeSession): Promise<void> {
-    this.pendingContext = prefix;
-    void this.view?.webview.postMessage({ type: 'prefill', text: prefix, hint: `Context loaded: ${session.title}` });
-  }
-
-  resolveWebviewView(view: vscode.WebviewView): void {
-    this.view = view;
-    view.webview.options = { enableScripts: true };
-    view.webview.html = this.html();
-    view.webview.onDidReceiveMessage(async (msg) => {
-      if (msg?.type === 'prompt') {
-        const text: string = String(msg.text ?? '');
-        if (!text.trim()) return;
-        this.history.push({ role: 'user', text });
-        void view.webview.postMessage({ type: 'user', text });
-        void view.webview.postMessage({ type: 'thinking' });
-        try {
-          const res = await this.dsh.prompt(text);
-          this.history.push({ role: 'dsh', text: res.text });
-          void view.webview.postMessage({ type: 'answer', text: res.text, sessionId: res.sessionId });
-        } catch (e) {
-          const err = `DSH request failed: ${(e as Error).message}`;
-          this.output.appendLine(`[dsh] ${err}`);
-          void view.webview.postMessage({ type: 'answer', text: err });
-        }
-      }
-      if (msg?.type === 'newSession') {
-        const id = await this.dsh.newSession();
-        this.setSession(id);
-      }
-    });
-  }
-
-  private html(): string {
-    const nonce = String(Date.now().toString(36));
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+function chatHtml(): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-:root{--dsh-accent:#4d6bfe;--dsh-accent-soft:rgba(77,107,254,.14);--dsh-card:var(--vscode-editor-background);color-scheme:dark}
+:root{--dsh-accent:#4d6bfe;--dsh-accent-soft:rgba(77,107,254,.14);color-scheme:dark}
 *{box-sizing:border-box}
-body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode-foreground);background:var(--vscode-sideBar-background);display:flex;flex-direction:column;height:100vh}
-.dsh-top{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-sideBar-background);position:sticky;top:0;z-index:2}
-.dsh-logo{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#4d6bfe,#38bdf8);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex:none}
-.dsh-title{font-weight:700;font-size:13px;line-height:1.1}
+body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode-foreground);background:var(--vscode-editor-background);display:flex;flex-direction:column;height:100vh}
+.dsh-top{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);position:sticky;top:0;z-index:2}
+.dsh-logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#4d6bfe,#38bdf8);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:14px;flex:none}
+.dsh-title{font-weight:700;font-size:14px;line-height:1.1}
 .dsh-sub{font-size:11px;opacity:.65}
 .dsh-pills{margin-left:auto;display:flex;gap:6px;align-items:center}
-.pill{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:20px;padding:2px 8px;opacity:.9;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);white-space:nowrap}
+.pill{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:20px;padding:3px 10px;opacity:.9;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:#3fb950;display:inline-block}
 .dot.busy{background:#d29922;animation:pulse 1s infinite alternate}
 @keyframes pulse{from{opacity:.4}to{opacity:1}}
-.iconbtn{border:1px solid var(--vscode-panel-border);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px}
-.dsh-tabs{display:flex;gap:4px;padding:8px 12px 0}
+.iconbtn{border:1px solid var(--vscode-panel-border);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
+.dsh-tabs{display:flex;gap:4px;padding:10px 16px 0;max-width:1100px;width:100%;margin:0 auto}
 .tab{border:0;background:transparent;color:var(--vscode-foreground);opacity:.6;font-size:12px;font-weight:600;padding:6px 10px;border-bottom:2px solid transparent;cursor:pointer}
 .tab.active{opacity:1;border-bottom-color:var(--dsh-accent)}
-#ctxchip{display:none;margin:8px 12px 0;font-size:11px;background:var(--dsh-accent-soft);border:1px solid var(--dsh-accent);border-radius:8px;padding:6px 8px}
+#ctxchip{display:none;margin:10px auto 0;max-width:1100px;width:calc(100% - 32px);font-size:11px;background:var(--dsh-accent-soft);border:1px solid var(--dsh-accent);border-radius:8px;padding:6px 8px}
 #ctxchip.show{display:block}
 #ctxchip button{float:right;border:0;background:transparent;color:inherit;cursor:pointer}
-#log{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+#log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;max-width:1100px;width:100%;margin:0 auto}
 .day{font-size:11px;opacity:.55;text-align:center}
 .rowmsg{display:flex;gap:8px;align-items:flex-start}
 .avatar{width:24px;height:24px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
 .avatar.dsh{background:linear-gradient(135deg,#4d6bfe,#38bdf8);color:#fff}
 .avatar.user{background:var(--vscode-button-background);color:var(--vscode-button-foreground)}
-.bubble{max-width:100%;border:1px solid var(--vscode-panel-border);border-radius:12px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.5;background:var(--vscode-editor-background)}
+.bubble{max-width:100%;border:1px solid var(--vscode-panel-border);border-radius:12px;padding:9px 11px;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.55;background:var(--vscode-editor-background)}
 .rowmsg.user{flex-direction:row-reverse}
 .rowmsg.user .bubble{background:var(--dsh-accent);border-color:var(--dsh-accent);color:#fff;border-top-right-radius:4px}
 .rowmsg.dsh .bubble{border-top-left-radius:4px}
@@ -293,13 +365,12 @@ body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode
 .thinking i{width:6px;height:6px;border-radius:50%;background:var(--dsh-accent);display:inline-block;animation:b 1s infinite}
 .thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}
 @keyframes b{0%,100%{opacity:.25}50%{opacity:1}}
-.tool{font-size:11px;border:1px dashed var(--vscode-panel-border);border-radius:8px;padding:6px 8px;opacity:.9;background:var(--vscode-editor-inactiveSelectionBackground)}
-.composer{border-top:1px solid var(--vscode-panel-border);padding:10px 12px 12px;background:var(--vscode-sideBar-background)}
-.box{border:1px solid var(--vscode-input-border);background:var(--vscode-input-background);border-radius:12px;padding:8px}
-textarea{width:100%;border:0;background:transparent;color:var(--vscode-input-foreground);resize:none;min-height:56px;max-height:160px;font-family:inherit;font-size:12.5px;outline:none}
+.composer{border-top:1px solid var(--vscode-panel-border);padding:12px 16px 14px;background:var(--vscode-editor-background)}
+.box{border:1px solid var(--vscode-input-border);background:var(--vscode-input-background);border-radius:12px;padding:8px;max-width:1100px;margin:0 auto}
+textarea{width:100%;border:0;background:transparent;color:var(--vscode-input-foreground);resize:none;min-height:56px;max-height:200px;font-family:inherit;font-size:13px;outline:none}
 .bar{display:flex;gap:6px;align-items:center;margin-top:6px}
 .hintline{font-size:10.5px;opacity:.55}
-.send{margin-left:auto;width:30px;height:30px;border-radius:50%;border:0;background:var(--dsh-accent);color:#fff;font-size:15px;cursor:pointer;flex:none}
+.send{margin-left:auto;width:32px;height:32px;border-radius:50%;border:0;background:var(--dsh-accent);color:#fff;font-size:16px;cursor:pointer;flex:none}
 .send:disabled{opacity:.4;cursor:default}
 .modelchip{font-size:11px;border:1px solid var(--vscode-panel-border);border-radius:6px;padding:2px 6px;opacity:.85}
 code{background:var(--vscode-textCodeBlock-background);padding:1px 4px;border-radius:4px}
@@ -307,17 +378,17 @@ pre{background:var(--vscode-textCodeBlock-background);padding:8px;border-radius:
 </style></head><body>
 <div class="dsh-top">
 <div class="dsh-logo">DS</div>
-<div><div class="dsh-title">DeepSeek Harness</div><div class="dsh-sub" id="sessline">mini console · acp</div></div>
-<div class="dsh-pills"><span class="pill"><span class="dot" id="statusdot"></span> <span id="statustext">idle</span></span><span class="pill" id="modelpill">deepseek-v4</span><button class="iconbtn" id="new">+ New</button></div>
+<div><div class="dsh-title">DeepSeek Harness</div><div class="dsh-sub" id="sessline">editor console · acp</div></div>
+<div class="dsh-pills"><span class="pill"><span class="dot" id="statusdot"></span> <span id="statustext">idle</span></span><span class="pill" id="modelpill">deepseek-v4</span><button class="iconbtn" id="new">+ New session</button></div>
 </div>
 <div class="dsh-tabs"><button class="tab active" id="tabchat">Chat</button><button class="tab" id="tabtraj">Trajectory</button></div>
 <div id="ctxchip"><button id="ctxx" title="Clear context">✕</button><span id="ctxtext"></span></div>
-<div id="log"><div class="day">This is a mini DeepSeek Harness console. Use “Send opencode Session to DSH” to attach history.</div></div>
+<div id="log"><div class="day">Sidebar lists sessions + history. This editor tab is the main chat — it switches when you click history.</div></div>
 <div class="composer"><div class="box">
 <textarea id="in" placeholder="Ask DeepSeek Harness…  (Ctrl+Enter to send · / commands · @ references)"></textarea>
-<div class="bar"><span class="modelchip" id="cwdchip">cwd: workspace</span><span class="hintline">ACP: session/prompt · streaming updates</span><button class="send" id="send" title="Send">↑</button></div>
+<div class="bar"><span class="modelchip">cwd: workspace</span><span class="hintline">ACP: session/prompt · streaming updates</span><button class="send" id="send" title="Send">↑</button></div>
 </div></div>
-<script nonce="${nonce}">
+<script>
 const vscode = acquireVsCodeApi();
 const log = document.getElementById('log');
 const input = document.getElementById('in');
@@ -342,20 +413,17 @@ function send(){ const t=input.value; if(!t.trim()||busy) return; input.value=''
 sendBtn.onclick=send;
 document.getElementById('new').onclick=()=>vscode.postMessage({type:'newSession'});
 document.getElementById('ctxx').onclick=()=>{ ctxchip.className=''; };
-document.getElementById('tabchat').onclick=e=>{ mode='chat'; document.getElementById('tabchat').className='tab active'; document.getElementById('tabtraj').className='tab'; };
-document.getElementById('tabtraj').onclick=e=>{ mode='traj'; document.getElementById('tabtraj').className='tab active'; document.getElementById('tabchat').className='tab'; };
+document.getElementById('tabchat').onclick=()=>{ mode='chat'; document.getElementById('tabchat').className='tab active'; document.getElementById('tabtraj').className='tab'; };
+document.getElementById('tabtraj').onclick=()=>{ mode='traj'; document.getElementById('tabtraj').className='tab active'; document.getElementById('tabchat').className='tab'; };
 input.addEventListener('keydown', e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ send(); } });
-input.addEventListener('input', ()=>{ input.style.height='auto'; input.style.height=Math.min(160,input.scrollHeight)+'px'; });
+input.addEventListener('input', ()=>{ input.style.height='auto'; input.style.height=Math.min(200,input.scrollHeight)+'px'; });
 window.addEventListener('message', e=>{ const m=e.data;
- if(m.type==='user'){ /* already rendered optimistically */ }
  if(m.type==='answer'){ rmThinking(); setBusy(false); if(mode==='chat'||/tool|call|traject/i.test(m.text)) addDsh(m.text, m.sessionId); if(m.sessionId) sessline.textContent='session '+m.sessionId; }
  if(m.type==='stream'){ rmThinking(); setBusy(true); bubble('dsh', fmt(m.text), '<span>live update</span>'); setBusy(false); }
- if(m.type==='thinking'){ /* already shown */ }
  if(m.type==='prefill'){ input.value=m.text||''; ctxtext.textContent=m.hint||'opencode context attached'; ctxchip.className='show'; input.focus(); }
- if(m.type==='session'){ log.innerHTML=''; sessline.textContent='session '+m.sessionId; setBusy(false); bubble('dsh','New DSH session started.<br>Ask anything — this mini console mirrors the Harness chat flow.','<span>'+esc(m.sessionId)+'</span>'); }
+ if(m.type==='session'){ log.innerHTML=''; sessline.textContent='session '+m.sessionId; setBusy(false); (m.history||[]).forEach(h=>{ if(h.role==='user') addUser(h.text); else addDsh(h.text, h.sessionId); }); if(!(m.history||[]).length) bubble('dsh','Switched session: '+esc(m.sessionId)+'<br>Ask anything — history clicks land here now.','<span>'+esc(m.sessionId)+'</span>'); }
 });
 </script></body></html>`;
-  }
 }
 
 export function deactivate(): void {

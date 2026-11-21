@@ -136,6 +136,14 @@ export class DshAcp {
     return this.ensureSession();
   }
 
+  /** Switch the active session without closing the previous one (ACP sessions persist server-side). */
+  async switchTo(sessionId: string): Promise<string> {
+    await this.ensureConnected();
+    this.current = { sessionId };
+    this.output.appendLine(`[dsh] switched to session ${sessionId}`);
+    return sessionId;
+  }
+
   async listSessions(): Promise<{ sessionId: string; title?: string }[]> {
     await this.ensureConnected();
     try {

@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
@@ -19,8 +19,9 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
+    "onView:deepseekHarness.sessions",
     "onView:deepseekHarness.opencodeHistory",
-    "onView:deepseekHarness.chat",
+    "onCommand:deepseekHarness.openChatEditor",
     "onCommand:deepseekHarness.refreshOpencode",
     "onCommand:deepseekHarness.openOpencodeSession"
   ],
@@ -37,10 +38,9 @@
     "views": {
       "deepseekHarness": [
         {
-          "id": "deepseekHarness.chat",
-          "name": "DSH Chat",
-          "type": "webview",
-          "initialSize": 2
+          "id": "deepseekHarness.sessions",
+          "name": "DSH Sessions",
+          "initialSize": 1
         },
         {
           "id": "deepseekHarness.opencodeHistory",
@@ -51,9 +51,23 @@
     },
     "commands": [
       {
+        "command": "deepseekHarness.openChatEditor",
+        "title": "Open DSH Chat in Editor",
+        "icon": "$(comment-discussion)"
+      },
+      {
         "command": "deepseekHarness.refreshOpencode",
         "title": "Refresh opencode History",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "deepseekHarness.refreshSessions",
+        "title": "Refresh DSH Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "deepseekHarness.selectDshSession",
+        "title": "Switch to DSH Session"
       },
       {
         "command": "deepseekHarness.openOpencodeSession",
@@ -75,12 +89,32 @@
     "menus": {
       "view/title": [
         {
+          "command": "deepseekHarness.openChatEditor",
+          "when": "view == deepseekHarness.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "deepseekHarness.newDshSession",
+          "when": "view == deepseekHarness.sessions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "deepseekHarness.refreshSessions",
+          "when": "view == deepseekHarness.sessions",
+          "group": "navigation@3"
+        },
+        {
           "command": "deepseekHarness.refreshOpencode",
           "when": "view == deepseekHarness.opencodeHistory",
           "group": "navigation"
         }
       ],
       "view/item/context": [
+        {
+          "command": "deepseekHarness.selectDshSession",
+          "when": "view == deepseekHarness.sessions && viewItem == dshSession",
+          "group": "inline"
+        },
         {
           "command": "deepseekHarness.openOpencodeSession",
           "when": "view == deepseekHarness.opencodeHistory && viewItem == opencodeSession",
@@ -90,6 +124,11 @@
           "command": "deepseekHarness.sendOpencodeToDsh",
           "when": "view == deepseekHarness.opencodeHistory && viewItem == opencodeSession",
           "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "deepseekHarness.openChatEditor"
         }
       ]
     },

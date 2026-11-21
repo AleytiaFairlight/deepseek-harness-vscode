@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.4
+
+- Editor-first layout: sidebar now holds `DSH Sessions` + `opencode History`; main chat moved to an editor tab (`Open DSH Chat in Editor`)
+- Session switching: clicking opencode history opens the transcript file AND switches the editor chat to that context (prefill chip); DSH session rows switch via `selectDshSession`
+- Per-session in-memory transcripts, session-line + status in header
+
 ## 0.0.3
 
 - Click-to-open fixed: tree provider now implements `getChildren(element)` so grouped history expands; session rows carry stable ids and fire `openOpencodeSession` on single click

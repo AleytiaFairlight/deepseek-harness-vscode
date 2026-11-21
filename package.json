@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
@@ -70,6 +70,14 @@
         "title": "Switch to DSH Session"
       },
       {
+        "command": "deepseekHarness.renameDshSession",
+        "title": "Rename DSH Session"
+      },
+      {
+        "command": "deepseekHarness.setupModel",
+        "title": "DSH: Setup Model (provider/model)"
+      },
+      {
         "command": "deepseekHarness.openOpencodeSession",
         "title": "Open opencode Session"
       },
@@ -116,6 +124,11 @@
           "group": "inline"
         },
         {
+          "command": "deepseekHarness.renameDshSession",
+          "when": "view == deepseekHarness.sessions && viewItem == dshSession",
+          "group": "inline"
+        },
+        {
           "command": "deepseekHarness.openOpencodeSession",
           "when": "view == deepseekHarness.opencodeHistory && viewItem == opencodeSession",
           "group": "inline"
@@ -154,6 +167,16 @@
           "type": "string",
           "default": "",
           "description": "Override path to opencode.db. Empty = auto-detect (%USERPROFILE%/.local/share/opencode/opencode.db, $XDG_DATA_HOME, $OPENCODE_DB)."
+        },
+        "deepseekHarness.provider": {
+          "type": "string",
+          "default": "deepseek-official",
+          "description": "DSH model provider route (Harness-style model setup)."
+        },
+        "deepseekHarness.model": {
+          "type": "string",
+          "default": "deepseek-v4",
+          "description": "DSH model id (Harness-style model setup). Click the model pill in chat or run DSH: Setup Model."
         }
       }
     }

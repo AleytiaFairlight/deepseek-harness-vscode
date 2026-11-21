@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.5
+
+- Session rename: right-click / command renames DSH sessions (stored locally, shown in tree + chat header)
+- History loads as chat: clicking opencode history renders its transcript as chat bubbles (user/assistant), no longer a prompt draft; transcript file still opens beside for reference
+- Harness-style model setup: provider/model picker (`deepseek-official` + custom), persisted to settings, pushed to live ACP session, clickable model pill in chat header
+
 ## 0.0.4
 
 - Editor-first layout: sidebar now holds `DSH Sessions` + `opencode History`; main chat moved to an editor tab (`Open DSH Chat in Editor`)

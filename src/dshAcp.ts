@@ -18,6 +18,7 @@ type AcpClientLike = {
   sessionPrompt?: (args: unknown) => Promise<unknown>;
   sessionList?: (args?: unknown) => Promise<{ sessions?: { sessionId: string; title?: string }[] }>;
   sessionClose?: (args: unknown) => Promise<unknown>;
+  sessionSetConfigOption?: (args: unknown) => Promise<unknown>;
 };
 
 export class DshAcp {
@@ -45,7 +46,32 @@ export class DshAcp {
       cliPath: c.get<string>('cliPath', 'dsh'),
       profile: c.get<string>('profile', 'acp'),
       defaultCwd: c.get<string>('defaultCwd', ''),
+      provider: c.get<string>('provider', 'deepseek-official'),
+      model: c.get<string>('model', 'deepseek-v4'),
     };
+  }
+
+  getModel(): { provider: string; model: string } {
+    const { provider, model } = this.cfg();
+    return { provider, model };
+  }
+
+  /** Harness-style model setup: persist provider/model and push to live ACP sessions. */
+  async setModel(provider: string, model: string): Promise<void> {
+    const c = vscode.workspace.getConfiguration('deepseekHarness');
+    await c.update('provider', provider, vscode.ConfigurationTarget.Global);
+    await c.update('model', model, vscode.ConfigurationTarget.Global);
+    this.output.appendLine(`[dsh] model set to ${provider}/${model}`);
+    // Push to the active session like Harness model-switch does (best effort; server may advertise its own catalog).
+    try {
+      const sid = this.current?.sessionId;
+      if (sid && this.client?.sessionSetConfigOption) {
+        await this.client.sessionSetConfigOption({ sessionId: sid, key: 'model', value: { provider, model } });
+        this.output.appendLine(`[dsh] pushed model to session ${sid}`);
+      }
+    } catch (e) {
+      this.output.appendLine(`[dsh] model push failed (will apply to next session): ${(e as Error).message}`);
+    }
   }
 
   private workspaceCwd(): string {

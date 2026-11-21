@@ -1,0 +1,115 @@
+{
+  "name": "deepseek-harness-vscode",
+  "displayName": "DeepSeek Harness",
+  "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
+  "version": "0.0.1",
+  "publisher": "deepseek-harness",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deepseek-ai/deepseek-harness.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:deepseekHarness.opencodeHistory",
+    "onView:deepseekHarness.chat",
+    "onCommand:deepseekHarness.refreshOpencode",
+    "onCommand:deepseekHarness.openOpencodeSession"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deepseekHarness",
+          "title": "DeepSeek Harness",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "deepseekHarness": [
+        {
+          "id": "deepseekHarness.chat",
+          "name": "DSH Chat",
+          "type": "webview",
+          "initialSize": 2
+        },
+        {
+          "id": "deepseekHarness.opencodeHistory",
+          "name": "opencode History",
+          "initialSize": 1
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "deepseekHarness.refreshOpencode",
+        "title": "Refresh opencode History",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "deepseekHarness.openOpencodeSession",
+        "title": "Open opencode Session"
+      },
+      {
+        "command": "deepseekHarness.sendOpencodeToDsh",
+        "title": "Send opencode Session to DSH"
+      },
+      {
+        "command": "deepseekHarness.newDshSession",
+        "title": "New DSH Session"
+      },
+      {
+        "command": "deepseekHarness.openDshChat",
+        "title": "Open DSH Chat"
+      }
+    ],
+    "configuration": {
+      "title": "DeepSeek Harness",
+      "properties": {
+        "deepseekHarness.cliPath": {
+          "type": "string",
+          "default": "dsh",
+          "description": "Path to the `dsh` CLI. Must support `dsh --profile acp` (ACP stdio server)."
+        },
+        "deepseekHarness.profile": {
+          "type": "string",
+          "default": "acp",
+          "description": "DSH profile to spawn for ACP. Default `acp`."
+        },
+        "deepseekHarness.defaultCwd": {
+          "type": "string",
+          "default": "",
+          "description": "Default working directory for new DSH sessions. Empty = current workspace folder."
+        },
+        "deepseekHarness.opencodeDbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override path to opencode.db. Empty = auto-detect (%USERPROFILE%/.local/share/opencode/opencode.db, $XDG_DATA_HOME, $OPENCODE_DB)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "echo no-linter"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

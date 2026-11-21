@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.14
+
+- FIX: clicks did nothing when `dsh` was missing — spawn no longer hangs: binary pre-flight (`where`/`which`), 20s connect/initialize timeouts, dead-child detection, 20s per-RPC timeouts, clear Output warnings + headless/error fallback instead of a frozen UI
+- Chat tabs now respond (Chat shows all, Trajectory hides user turns); Send becomes ■ Stop while busy (session/cancel); model pill, effort, permission, workspace chips all wired with existence-checked handlers
+
 ## 0.0.13
 
 - Built from upstream repo (deepseek-harness@2e39e70): chat follows ChatFlow/InputBar (user bubble right 70%/20px, assistant plain 14/24, collapsible tool groups, 28px composer card, suggestion chips, stop button via session/cancel)

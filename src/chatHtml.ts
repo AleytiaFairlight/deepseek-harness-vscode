@@ -44,6 +44,7 @@ textarea::placeholder{color:var(--vscode-input-placeholderForeground);overflow:h
 .send:disabled{opacity:.4}
 .sugrow{display:flex;gap:8px;justify-content:center;margin:8px 0}.sugrow button{border:1px solid var(--vscode-panel-border);background:transparent;color:var(--vscode-foreground);border-radius:16px;padding:4px 12px;cursor:pointer;font-size:12px}
 .status{display:flex;gap:14px;justify-content:center;color:var(--vscode-descriptionForeground);font-size:11px;padding:6px 0 10px}
+#log[data-mode="traj"] .userRow{display:none}
 .thinking{color:var(--vscode-descriptionForeground);font-size:12px}
 </style></head><body>
 <div class="hbar"><span class="sess" id="sessname">Test</span><span class="mode">◈ Standard mode</span><span class="mode">⛉ <span id="subcount">0 subagents</span></span>
@@ -79,6 +80,9 @@ document.getElementById('modelpill').onclick=()=>vscode.postMessage({type:'model
 document.getElementById('effort').onclick=(e)=>{ e.stopPropagation(); vscode.postMessage({type:'effortSetup'}); };
 document.getElementById('permbtn').onclick=()=>vscode.postMessage({type:'openSettings'});
 document.getElementById('cwdbtn').onclick=()=>vscode.postMessage({type:'selectWorkspace'});
+document.getElementById('tabchat').onclick=()=>setTab('chat');
+document.getElementById('tabtraj').onclick=()=>setTab('traj');
+function setTab(m){ document.getElementById('tabchat').className='tab'+(m==='chat'?' active':''); document.getElementById('tabtraj').className='tab'+(m==='traj'?' active':''); document.getElementById('log').dataset.mode=m; }
 document.getElementById('plus').onclick=()=>{ input.value='/'; input.focus(); };
 document.getElementById('ctxx').onclick=()=>{ document.getElementById('ctxchip').className=''; };
 document.querySelectorAll('.sug').forEach(b=>b.onclick=()=>{ input.value=b.textContent||''; input.focus(); });

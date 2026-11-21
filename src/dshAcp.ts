@@ -134,15 +134,19 @@ export class DshAcp {
     return name;
   }
 
-  private async rpc(methodName: string, params: any): Promise<any> {
+  private async rpc(methodName: string, params: any, timeoutMs = 20000): Promise<any> {
     await this.ensureConnected();
     if (!this.agent || this.useFallback) throw new Error('ACP not connected (fallback active)');
     const method = this.method(methodName);
-    return this.agent.request(method, params);
+    return withTimeout(this.agent.request(method, params), timeoutMs, `ACP ${methodName} timed out`);
   }
 
+  /** Never hangs: resolves even when dsh is missing (fallback mode). */
   async ensureConnected(): Promise<void> {
-    if (this.agent && this.child) return;
+    if ((this.agent || this.useFallback) && this.child) return;
+    if (this.useFallback && !this.child) {
+      // Re-try a real connection on each new intent, but never block longer than the inner timeout.
+    }
     if (this.connecting) return this.connecting;
     this.connecting = this.connectInner().finally(() => {
       this.connecting = undefined;
@@ -152,25 +156,42 @@ export class DshAcp {
 
   private async connectInner(): Promise<void> {
     const { cliPath, profile } = this.cfg();
+    // Pre-flight: fail fast with a clear message instead of hanging on a dead child.
+    const found = await findBinary(cliPath);
+    if (!found) {
+      this.output.appendLine(`[dsh] CLI not found: "${cliPath}" is not on PATH. Install: npm i -g @deepseek-ai/dsh@0.2.2-rc.5 (Node>=24.9) or set deepseekHarness.cliPath. Chat uses headless/error fallback until then.`);
+      this.useFallback = true;
+      return;
+    }
     this.output.appendLine(`[dsh] spawning: ${cliPath} --profile ${profile}`);
     let child: child_process.ChildProcessWithoutNullStreams;
     try {
       child = child_process.spawn(cliPath, ['--profile', profile], { stdio: ['pipe', 'pipe', 'pipe'], env: this.spawnEnv() });
     } catch (e) {
-      throw new Error(`Cannot spawn "${cliPath}": ${(e as Error).message}. Set deepseekHarness.cliPath to your dsh binary.`);
+      this.output.appendLine(`[dsh] spawn failed: ${(e as Error).message}. Using headless/error fallback.`);
+      this.useFallback = true;
+      return;
     }
     this.child = child;
+    let dead = false;
+    const onDead = (why: string) => {
+      if (dead) return;
+      dead = true;
+      this.output.appendLine(`[dsh] ACP process dead before handshake (${why}). Using fallback.`);
+    };
     child.stderr.on('data', (d) => this.output.append(String(d)));
     child.on('exit', (code) => {
       this.output.appendLine(`[dsh] ACP process exited with code ${code}`);
-      this.child = undefined;
-      this.agent = undefined;
-      this.connection = undefined;
-      this.current = null;
+      onDead(`exit ${code}`);
+      if (!this.agent) {
+        this.child = undefined;
+        this.current = null;
+      }
     });
     child.on('error', (err) => {
       this.output.appendLine(`[dsh] spawn error: ${err.message}`);
-      void vscode.window.showErrorMessage(`DeepSeek Harness: cannot start "${cliPath} --profile ${profile}": ${err.message}`);
+      onDead(err.message);
+      void vscode.window.showWarningMessage(`DeepSeek Harness: cannot start "${cliPath} --profile ${profile}": ${err.message}. Using fallback; install dsh or fix deepseekHarness.cliPath.`);
     });
 
     // Real SDK path: ESM dynamic import (require() fails on ESM packages).
@@ -186,31 +207,34 @@ export class DshAcp {
         throw new Error('SDK missing ndJsonStream/client (unexpected version)');
       }
       const stream = sdk.ndJsonStream(toWebWritable, toWebReadable);
-      const app = sdk.client({ name: 'deepseek-harness-vscode', version: '0.0.10' });
+      const app = sdk.client({ name: 'deepseek-harness-vscode', version: '0.0.14' });
       app.onRequest(sdk.methods?.client?.session?.requestPermission ?? 'session/request_permission', async () => ({ outcome: { outcome: 'cancelled' } }));
       app.onNotification(sdk.methods?.client?.session?.update ?? 'session/update', async (n: any) => {
         const text = extractUpdateText(n?.params ?? n);
         if (text) this.onUpdate?.(text);
       });
-      this.output.appendLine('[dsh] ACP SDK loaded; connecting stdio…');
-      const connection = await app.connect(stream);
+      this.output.appendLine('[dsh] ACP SDK loaded; connecting stdio (20s timeout)…');
+      const connection = await withTimeout(app.connect(stream) as Promise<any>, 20000, 'ACP connect timed out');
       this.connection = connection;
       this.agent = connection.agent;
       const protocolVersion = sdk.PROTOCOL_VERSION ?? 1;
-      await this.agent.request(sdk.methods?.agent?.initialize ?? 'initialize', {
+      await withTimeout(this.agent.request(sdk.methods?.agent?.initialize ?? 'initialize', {
         protocolVersion,
         clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
-      });
+      }), 20000, 'ACP initialize timed out');
       try {
-        await this.agent.request(sdk.methods?.agent?.authenticate ?? 'authenticate', {});
+        await withTimeout(this.agent.request(sdk.methods?.agent?.authenticate ?? 'authenticate', {}), 10000, 'ACP authenticate timed out');
       } catch { /* immediate-success servers may not need it */ }
+      if (dead) throw new Error('ACP process died during handshake');
       this.useFallback = false;
       this.output.appendLine('[dsh] ACP initialize ok (real transport).');
     } catch (e) {
-      this.output.appendLine(`[dsh] ACP SDK connect failed, using headless fallback: ${(e as Error).message}`);
+      this.output.appendLine(`[dsh] ACP unavailable, using headless/error fallback: ${(e as Error).message}`);
       this.useFallback = true;
       this.agent = undefined;
-      // Keep child running (server still speaks ACP); chat falls back to headless per prompt.
+      this.connection = undefined;
+      try { child.kill(); } catch { /* ignore */ }
+      if (this.child === child) this.child = undefined;
     }
   }
 
@@ -363,6 +387,34 @@ export const PROVIDER_ENV: Record<string, string> = {
   groq: 'GROQ_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
 };
+
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([p.finally(() => { if (timer) clearTimeout(timer); }), timeout]) as Promise<T>;
+}
+
+function findBinary(cmd: string, timeoutMs = 8000): Promise<string> {
+  return new Promise((resolve) => {
+    if (/[\\/]/.test(cmd)) {
+      const fs = require('node:fs') as typeof import('node:fs');
+      try {
+        fs.accessSync(cmd, fs.constants.X_OK);
+        return resolve(cmd);
+      } catch {
+        return resolve('');
+      }
+    }
+    const { execFile } = require('node:child_process') as typeof import('node:child_process');
+    const probe = process.platform === 'win32' ? 'where' : 'which';
+    execFile(probe, [cmd], { timeout: timeoutMs }, (err: any, stdout: any) => {
+      if (err) return resolve('');
+      resolve(String(stdout || '').split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)[0] ?? '');
+    });
+  });
+}
 
 function runHeadless(cliPath: string, cwd: string, promptText: string, output: vscode.OutputChannel, env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve) => {

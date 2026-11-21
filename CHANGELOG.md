@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.13
+
+- Built from upstream repo (deepseek-harness@2e39e70): chat follows ChatFlow/InputBar (user bubble right 70%/20px, assistant plain 14/24, collapsible tool groups, 28px composer card, suggestion chips, stop button via session/cancel)
+- Settings Models follows upstream (DeepSeek onboarding copy, shipped-provider picker, Custom card order + acme-gateway placeholders, Fetch available models, write-only keys, green/red credential dots, env precedence launch→$cwd/.env→$DSH_HOME/.env); Permission row uses Harness strings + Full-access confirm copy
+
 ## 0.0.12
 
 - Settings saves verified: write + read-back + exact saved values in confirmation; model/effort go through live-push setters with surfaced `session/set_config_option` errors (no silent fails)

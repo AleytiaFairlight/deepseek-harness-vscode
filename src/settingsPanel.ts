@@ -127,6 +127,15 @@ export class SettingsManager {
       if (msg?.type === 'setupModel') {
         void vscode.commands.executeCommand('deepseekHarness.setupModel');
       }
+      if (msg?.type === 'fetchModels') {
+        const { baseURL, apiKey, api } = (msg as any) ?? {};
+        try {
+          const list = await fetchGatewayModels(String(baseURL || ''), String(apiKey || ''), String(api || 'openai-completions'));
+          void panel.webview.postMessage({ type: 'fetchedModels', models: list });
+        } catch (e) {
+          void panel.webview.postMessage({ type: 'fetchedModels', error: (e as Error).message });
+        }
+      }
     });
     this.panel = panel;
     void this.pushValues();
@@ -181,10 +190,12 @@ body{font-family:var(--vscode-font-family);margin:0;color:var(--vscode-foregroun
 .nav{width:210px;flex:none;border-right:1px solid var(--vscode-panel-border);padding:14px 10px;display:flex;flex-direction:column;gap:2px}
 .nav button{border:0;background:transparent;color:var(--vscode-foreground);text-align:left;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:12.5px;opacity:.75}
 .nav button.active{background:var(--vscode-list-activeSelectionBackground);color:var(--vscode-list-activeSelectionForeground);opacity:1;font-weight:600}
-.main{flex:1;padding:18px 22px;min-width:0}
+.nav .nh{font-size:11px;opacity:.55;margin:8px 10px 2px}
+.main{flex:1;padding:18px 22px;min-width:0;max-width:720px}
 .card{border:1px solid var(--vscode-panel-border);border-radius:12px;padding:14px;margin-bottom:12px;background:var(--vscode-editor-background)}
 .card h3{margin:0 0 4px;font-size:13px}
 .card p{margin:0 0 10px;font-size:11.5px;opacity:.7}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}.dot.ok{background:#3fb950}.dot.miss{background:#f85149}
 label{display:block;font-size:11.5px;margin:10px 0 4px;opacity:.85}
 input,select,textarea{width:100%;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:8px;padding:7px 9px;font-size:12.5px;font-family:inherit}
 textarea{min-height:56px;resize:vertical}
@@ -201,12 +212,14 @@ button.ghost{background:var(--vscode-button-secondaryBackground);color:var(--vsc
 <div class="top"><div class="logo">DS</div><div><div class="title">DeepSeek Harness — Settings</div><div class="sub">Mini copy of Harness Settings → Models · keys stay in VS Code SecretStorage + DSH env</div></div><div style="margin-left:auto"><span class="pill" id="livemodel">…</span></div></div>
 <div class="wrap">
 <div class="nav">
+<div class="nh">Harness sections</div>
 <button data-page="general" class="active">General</button>
 <button data-page="models">Models</button>
-<button data-page="permissions">Permissions</button>
+<button data-page="permissions">Permission</button>
 <button data-page="connection">Connection (ACP)</button>
 <button data-page="opencode">opencode</button>
 <button data-page="about">About</button>
+<div class="nh">Upstream order ref: Account · General · Models · Plugins · Agent presets</div>
 </div>
 <div class="main">
 <div class="page active" id="page-general">
@@ -219,23 +232,24 @@ button.ghost{background:var(--vscode-button-secondaryBackground);color:var(--vsc
 </div></div>
 </div>
 <div class="page" id="page-models">
-<div class="card"><h3>DeepSeek (official)</h3><p>Same as Harness Models card: one API-key field, write-only. Saved key shows as <code>saved ••••</code>, never the literal secret.</p>
+<div class="card"><h3><span class="dot" id="deepseekDot"></span>DeepSeek (official)</h3><p>Add an API key to get started. Write-only: saved shows <code>saved ••••</code>, never the secret. Precedence: launch env → <code>$cwd/.env</code> → <code>$DSH_HOME/.env</code>. Endpoint default uses <code>DEEPSEEK_BASE_URL</code>.</p>
 <label>DeepSeek API key <span class="pill" id="deepseekState">…</span></label><div class="keyrow"><input id="deepseekKey" type="password" placeholder="sk-… (blank = keep saved / use env DEEPSEEK_API_KEY)" /><button class="ghost eye" id="eyeDeepseek">Show</button></div>
 <p class="hint">Leave blank to keep the saved key or fall back to <code>DEEPSEEK_API_KEY</code>. Typing replaces the whole key. Save with empty field keeps existing.</p>
 </div>
-<div class="card"><h3>Third-party provider</h3><p>Pick a shipped provider (like Harness “Add model provider”), paste its key. Yellow hint = no key/env detected.</p>
+<div class="card"><h3><span class="dot" id="providerDot"></span>Third-party model provider</h3><p>How to add: pick OpenAI, Anthropic, Kimi… — the installed catalog supplies endpoint/protocol. Stored key never enters the field; typing replaces the whole key (Backspace/Delete then Apply removes it).</p>
 <label>Provider</label><select id="provider">${providerOptions}</select>
 <label>API key <span class="pill" id="providerState">…</span></label><div class="keyrow"><input id="providerKey" type="password" placeholder="paste key · blank = keep saved / use env" /><button class="ghost eye" id="eyeProvider">Show</button></div>
 <label>Base URL override (optional)</label><input id="providerBaseUrl" placeholder="https://gateway.example/v1" />
 <p class="hint" id="envHint"></p>
 </div>
-<div class="card"><h3>Custom model API</h3><p>Relay / gateway / self-hosted / opencode gateway — same fields as Harness custom form.</p>
-<div class="row2"><div><label>Provider ID (permanent, lowercase)</label><input id="customProviderId" placeholder="my-gateway" /></div>
-<div><label>Display name</label><input id="customDisplayName" placeholder="My Gateway" /></div></div>
-<label>Base URL</label><input id="customBaseURL" placeholder="https://gateway.example/v1 (Gemini: …/v1beta)" />
+<div class="card"><h3>Custom model API</h3><p>Connect a relay, company gateway, self-hosted server, or opencode gateway by its base URL, protocol, and models. Provider ID is permanent.</p>
+<div class="row2"><div><label>Provider ID (permanent, lowercase)</label><input id="customProviderId" placeholder="acme-gateway" /></div>
+<div><label>Display name</label><input id="customDisplayName" placeholder="Acme" /></div></div>
+<label>Base URL (Gemini includes API version, e.g. …/v1beta)</label><input id="customBaseURL" placeholder="https://gateway.example/v1" />
 <label>API protocol</label><select id="customApi"><option value="openai-completions">OpenAI Chat Completions (openai-completions)</option><option value="openai-responses">OpenAI Responses (openai-responses)</option><option value="anthropic-messages">Anthropic Messages (anthropic-messages)</option><option value="google-generative-ai">Gemini API (google-generative-ai)</option></select>
 <label>API key</label><div class="keyrow"><input id="customKey" type="password" placeholder="key for this gateway" /><button class="ghost eye" id="eyeCustom">Show</button></div>
 <label>Models (one id per line)</label><textarea id="customModels" placeholder="my-model-1&#10;my-model-2"></textarea>
+<div style="margin-top:8px;display:flex;gap:8px"><button class="ghost" id="fetchModels">Fetch available models</button><span class="hint" id="fetchStatus"></span></div>
 </div>
 <div class="card"><h3>Active model</h3><p>Configured providers appear in the picker. Selecting also becomes the default for new sessions (current sessions keep their recorded model).</p>
 <div class="row2"><div><label>Provider</label><input id="activeProvider" placeholder="deepseek-official" /></div>
@@ -244,9 +258,9 @@ button.ghost{background:var(--vscode-button-secondaryBackground);color:var(--vsc
 </div>
 </div>
 <div class="page" id="page-permissions">
-<div class="card"><h3>Permissions</h3><p>Same presets as the Harness: <code>workspace-write</code> (ask) vs <code>danger-full-access</code> (never ask).</p>
-<label>Permission preset</label><select id="permissionPreset"><option value="workspace-write">workspace-write (ask)</option><option value="danger-full-access">danger-full-access (never ask)</option></select>
-<p class="hint">Use an isolated workspace with danger-full-access.</p>
+<div class="card"><h3>Permission</h3><p>Choose the default permission mode for new sessions (Harness row).</p>
+<label>Permission</label><select id="permissionPreset"><option value="workspace-write">Workspace Write</option><option value="danger-full-access">Full access</option></select>
+<p class="hint">Full access lets new sessions reduce confirmation steps — confirm you understand the risks. Use an isolated workspace.</p>
 </div>
 </div>
 <div class="page" id="page-connection">
@@ -291,6 +305,7 @@ document.getElementById('save').onclick=()=>{
 };
 document.getElementById('reload').onclick=()=>vscode.postMessage({type:'get'});
 document.getElementById('gomodel').onclick=()=>vscode.postMessage({type:'setupModel'});
+document.getElementById('fetchModels').onclick=()=>{ document.getElementById('fetchStatus').textContent='Fetching…'; vscode.postMessage({type:'fetchModels', baseURL:val('customBaseURL'), apiKey:val('customKey'), api:val('customApi')}); };
 window.addEventListener('message', e=>{
  const m=e.data;
  if(m.type==='values'&&m.values){
@@ -301,7 +316,8 @@ window.addEventListener('message', e=>{
   setVal('customProviderId',m.values.customProviderId); setVal('customDisplayName',m.values.customDisplayName); setVal('customBaseURL',m.values.customBaseURL); setVal('customApi',m.values.customApi||'openai-completions'); setVal('customModels',m.values.customModels);
   const p=val('provider'); document.getElementById('envHint').textContent = p==='custom' ? 'Custom uses the form below.' : ('Env fallback: '+(ENVHINT[p]||'(provider env)'));
  }
- if(m.type==='values'&&m.keyStatus){ document.getElementById('deepseekState').textContent = m.keyStatus.hasDeepseekKey ? 'saved ••••' : 'no key'; document.getElementById('providerState').textContent = m.keyStatus.hasProviderKey ? 'saved ••••' : 'no key (yellow: enter key or set env)'; }
+ if(m.type==='values'&&m.keyStatus){ document.getElementById('deepseekState').textContent = m.keyStatus.hasDeepseekKey ? 'saved ••••' : 'no key'; document.getElementById('providerState').textContent = m.keyStatus.hasProviderKey ? 'saved ••••' : 'no key (yellow: enter key or set env)'; const dd=document.getElementById('deepseekDot'); if(dd){ dd.className='dot '+(m.keyStatus.hasDeepseekKey?'ok':'miss'); } const pd=document.getElementById('providerDot'); if(pd){ pd.className='dot '+(m.keyStatus.hasProviderKey?'ok':'miss'); } }
+ if(m.type==='fetchedModels'){ if(m.error){ document.getElementById('fetchStatus').textContent='Fetch failed: '+m.error+' — enter ids by hand.'; } else if(m.models&&m.models.length){ const cur=val('customModels'); const merged=[...new Set([...cur.split(/\n+/).map(s=>s.trim()).filter(Boolean), ...m.models])].join('\n'); document.getElementById('customModels').value=merged; document.getElementById('fetchStatus').textContent='Found '+m.models.length+' — ticked into list. Nothing saved until Save.'; } else { document.getElementById('fetchStatus').textContent='No models listed — enter ids by hand.'; } }
  if(m.type==='saved'){ document.getElementById('status').textContent='Saved ✓ keys are write-only'; setTimeout(()=>document.getElementById('status').textContent='',2000); }
  if(m.liveModel){ document.getElementById('livemodel').textContent=(m.liveModel.provider||'')+'/'+(m.liveModel.model||''); }
  if(m.type==='values'&&m.liveModel){ document.getElementById('livemodel').textContent=(m.liveModel.provider||'')+'/'+(m.liveModel.model||''); }
@@ -309,3 +325,23 @@ window.addEventListener('message', e=>{
 vscode.postMessage({type:'get'});
 </script></body></html>`;
 }
+
+async function fetchGatewayModels(baseURL: string, apiKey: string, api: string): Promise<string[]> {
+  const base = baseURL.trim().replace(/\/+$/, '');
+  if (!base) throw new Error('Enter a Base URL first.');
+  const url = api === 'google-generative-ai' ? `${base}/models?key=` : `${base}/models`;
+  const headers: Record<string, string> = {};
+  if (apiKey) headers.Authorization = `Bearer `;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const res = await fetch(url, { headers, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP  from gateway`);
+    const data: any = await res.json();
+    const arr = Array.isArray(data) ? data : data.data ?? data.models ?? [];
+    return (arr as any[]).map((m) => String(m.id ?? m.name ?? '')).filter(Boolean).slice(0, 200);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+

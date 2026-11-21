@@ -288,6 +288,17 @@ export class DshAcp {
     return this.current ? [{ sessionId: this.current.sessionId }] : [];
   }
 
+  async cancel(): Promise<void> {
+    const sid = this.current?.sessionId;
+    if (!sid || !this.agent || this.useFallback) return;
+    try {
+      await this.agent.request(this.method('session/cancel'), { sessionId: sid });
+      this.output.appendLine(`[dsh] session/cancel -> ${sid}`);
+    } catch (e) {
+      this.output.appendLine(`[dsh] cancel failed: ${(e as Error).message}`);
+    }
+  }
+
   async prompt(text: string): Promise<DshPromptResult> {
     const sessionId = await this.ensureSession();
     // Saved settings apply automatically: sync model + effort before every prompt (no command panel needed).

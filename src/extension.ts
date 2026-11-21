@@ -230,6 +230,10 @@ class ChatEditorManager {
         const aliases = this.context.globalState.get<Record<string, string>>('dshSessionTitles', {});
         this.setSession(id, aliases[id]);
       }
+      if (msg?.type === 'cancel') {
+        await this.dsh.cancel();
+        void panel.webview.postMessage({ type: 'answer', text: '(cancelled — session/cancel sent; in-flight work drains)', sessionId: this.dsh.activeSessionId });
+      }
       if (msg?.type === 'modelSetup') {
         void vscode.commands.executeCommand('deepseekHarness.setupModel');
       }

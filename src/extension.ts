@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { DshAcp } from './dshAcp';
-import { SettingsManager } from './settingsPanel';
+import { DshAcp, PROVIDER_ENV } from './dshAcp';
+import { SettingsManager, PROVIDER_CATALOG, refreshDshEnv } from './settingsPanel';
 import {
   formatSessionForDsh,
   listOpencodeSessions,
@@ -207,19 +207,21 @@ class ChatEditorManager {
       if (msg?.type === 'modelSetup') {
         void vscode.commands.executeCommand('deepseekHarness.setupModel');
       }
-      if (msg?.type === 'modelSetup') {
-        void vscode.commands.executeCommand('deepseekHarness.setupModel');
+      if (msg?.type === 'openSettings') {
+        void vscode.commands.executeCommand('deepseekHarness.openSettings');
       }
     });
     this.panel = panel;
     const active = this.dsh.activeSessionId;
     const aliases = this.context.globalState.get<Record<string, string>>('dshSessionTitles', {});
+    const perm0 = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
     void panel.webview.postMessage({
       type: 'init',
       sessionId: active,
       title: active ? aliases[active] : undefined,
       history: active ? this.transcripts.get(active) ?? [] : [],
       model: this.dsh.getModel(),
+      permissionPreset: perm0,
     });
     return panel;
   }
@@ -235,7 +237,8 @@ class ChatEditorManager {
   }
 
   pushModel(): void {
-    void this.panel?.webview.postMessage({ type: 'model', model: this.dsh.getModel() });
+    const perm = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
+    void this.panel?.webview.postMessage({ type: 'model', model: this.dsh.getModel(), permissionPreset: perm });
   }
 
   /** Load opencode history as chat bubbles (not as a prompt draft). */
@@ -277,6 +280,7 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionTree.refresh();
     chat.pushModel();
   });
+  void refreshDshEnv(context, dsh).then(() => chat.pushModel());
 
   context.subscriptions.push(
     vscode.commands.registerCommand('deepseekHarness.openChatEditor', async () => {
@@ -329,23 +333,54 @@ export function activate(context: vscode.ExtensionContext): void {
       chat.setSession(id, updated[id]);
     }),
     vscode.commands.registerCommand('deepseekHarness.setupModel', async () => {
-      // Harness-style model setup: provider + model + optional custom id.
+      // Harness-style: pick a shipped provider (or opencode gateway / custom), paste API key, pick model.
       const current = dsh.getModel();
-      const provider = await vscode.window.showQuickPick(['deepseek-official', 'custom…'], {
-        placeHolder: `Provider (current: ${current.provider})`,
-      });
-      if (!provider) return;
-      let providerId = current.provider;
-      if (provider === 'custom…') {
-        const customP = await vscode.window.showInputBox({ prompt: 'Provider id', value: current.provider });
-        if (!customP?.trim()) return;
-        providerId = customP.trim();
-      } else {
-        providerId = provider;
+      const items = PROVIDER_CATALOG.map((p) => ({
+        label: p.label,
+        description: p.id === current.provider ? '(current)' : p.env ? p.env : undefined,
+        id: p.id,
+      }));
+      const picked = await vscode.window.showQuickPick(items, { placeHolder: `Provider (current: ${current.provider}/${current.model}) — or open Settings for full form` });
+      if (!picked) return;
+      if (picked.id === 'custom') {
+        settings.open();
+        return;
       }
-      const models = providerId === 'deepseek-official'
-        ? ['deepseek-v4', 'deepseek-v4-flash', 'deepseek-chat', 'custom…']
-        : ['default', 'custom…'];
+      let providerId = picked.id;
+      // API key inline (optional — Settings holds the full write-only form). Blank keeps saved/env.
+      const envName = PROVIDER_ENV[providerId] ?? `${providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`;
+      const savedKey = await context.secrets.get(`dsh.apikey.${providerId}`);
+      const keyInput = await vscode.window.showInputBox({
+        prompt: `API key for ${providerId} (${savedKey ? 'saved •••• — blank keeps it' : `blank uses env ${envName}`})`,
+        password: true,
+        placeHolder: savedKey ? 'saved •••• (blank = keep)' : `paste key or leave blank for env ${envName}`,
+      });
+      if (keyInput === undefined) return;
+      if (keyInput.trim()) {
+        await context.secrets.store(`dsh.apikey.${providerId}`, keyInput.trim());
+        await refreshDshEnv(context, dsh);
+      } else if (!savedKey) {
+        void vscode.window.showWarningMessage(`No saved key for ${providerId}; will try env ${envName}. Add one in DSH Settings → Models for reliability.`);
+      }
+      // Model list: DeepSeek + custom provider models when known.
+      let models: string[] = ['custom…'];
+      if (providerId === 'deepseek-official') models = ['deepseek-v4', 'deepseek-v4-flash', 'deepseek-chat', 'custom…'];
+      else if (providerId === 'anthropic') models = ['claude-sonnet-4-5', 'claude-opus-4-1', 'custom…'];
+      else if (providerId === 'openai') models = ['gpt-5', 'gpt-4o', 'custom…'];
+      else if (providerId === 'moonshotai') models = ['kimi-k2', 'custom…'];
+      else if (providerId === 'zai') models = ['glm-4-5', 'custom…'];
+      else if (providerId === 'opencode-gateway') {
+        const custom = context.globalState.get<Record<string, string>>('dsh.customProvider', {});
+        const list = (custom.models ?? '').split(/\n+/).map((s) => s.trim()).filter(Boolean);
+        models = [...list, 'custom…'];
+        if (providerId === 'opencode-gateway' && !custom.providerId) providerId = 'openai';
+      } else {
+        const custom = context.globalState.get<Record<string, string>>('dsh.customProvider', {});
+        const list = providerId === (custom.providerId ?? '') && custom.models
+          ? custom.models.split(/\n+/).map((s) => s.trim()).filter(Boolean)
+          : [];
+        models = [...list, 'custom…'];
+      }
       const pick = await vscode.window.showQuickPick(models, { placeHolder: `Model for ${providerId} (current: ${current.model})` });
       if (!pick) return;
       let modelId = pick;
@@ -355,9 +390,10 @@ export function activate(context: vscode.ExtensionContext): void {
         modelId = customM.trim();
       }
       await dsh.setModel(providerId, modelId);
+      await refreshDshEnv(context, dsh);
       chat.pushModel();
       sessionTree.refresh();
-      void vscode.window.showInformationMessage(`DSH model: ${providerId}/${modelId}`);
+      void vscode.window.showInformationMessage(`DSH model: ${providerId}/${modelId} (key: ${savedKey || keyInput.trim() ? 'saved/env' : 'env-only'})`);
     }),
     vscode.commands.registerCommand('deepseekHarness.openOpencodeSession', async (arg?: unknown) => {
       const session = unwrapSession(arg) ?? (await pickOpencodeSession(opencodeTree));
@@ -445,13 +481,13 @@ body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode
 .dot.busy{background:#d29922;animation:pulse 1s infinite alternate}
 @keyframes pulse{from{opacity:.4}to{opacity:1}}
 .iconbtn{border:1px solid var(--vscode-panel-border);background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px}
-.dsh-tabs{display:flex;gap:4px;padding:10px 16px 0;max-width:1100px;width:100%;margin:0 auto}
+.dsh-tabs{display:flex;gap:4px;padding:10px 16px 0;max-width:800px;width:100%;margin:0 auto}
 .tab{border:0;background:transparent;color:var(--vscode-foreground);opacity:.6;font-size:12px;font-weight:600;padding:6px 10px;border-bottom:2px solid transparent;cursor:pointer}
 .tab.active{opacity:1;border-bottom-color:var(--dsh-accent)}
-#ctxchip{display:none;margin:10px auto 0;max-width:1100px;width:calc(100% - 32px);font-size:11px;background:var(--dsh-accent-soft);border:1px solid var(--dsh-accent);border-radius:8px;padding:6px 8px}
+#ctxchip{display:none;margin:10px auto 0;max-width:800px;width:calc(100% - 32px);font-size:11px;background:var(--dsh-accent-soft);border:1px solid var(--dsh-accent);border-radius:8px;padding:6px 8px}
 #ctxchip.show{display:block}
 #ctxchip button{float:right;border:0;background:transparent;color:inherit;cursor:pointer}
-#log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;max-width:1100px;width:100%;margin:0 auto}
+#log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;max-width:800px;width:100%;margin:0 auto}
 .day{font-size:11px;opacity:.55;text-align:center}
 .rowmsg{display:flex;gap:8px;align-items:flex-start}
 .avatar{width:24px;height:24px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
@@ -469,7 +505,7 @@ body{font-family:var(--vscode-font-family);margin:0;padding:0;color:var(--vscode
 .thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}
 @keyframes b{0%,100%{opacity:.25}50%{opacity:1}}
 .composer{border-top:1px solid var(--vscode-panel-border);padding:12px 16px 14px;background:var(--vscode-editor-background)}
-.box{border:1px solid var(--vscode-input-border);background:var(--vscode-input-background);border-radius:12px;padding:8px;max-width:1100px;margin:0 auto}
+.box{border:1px solid var(--vscode-input-border);background:var(--vscode-input-background);border-radius:12px;padding:8px;max-width:800px;margin:0 auto}
 textarea{width:100%;border:0;background:transparent;color:var(--vscode-input-foreground);resize:none;min-height:56px;max-height:200px;font-family:inherit;font-size:13px;outline:none}
 .bar{display:flex;gap:6px;align-items:center;margin-top:6px}
 .hintline{font-size:10.5px;opacity:.55}
@@ -482,11 +518,11 @@ pre{background:var(--vscode-textCodeBlock-background);padding:8px;border-radius:
 <div class="dsh-top">
 <div class="dsh-logo">DS</div>
 <div><div class="dsh-title">DeepSeek Harness</div><div class="dsh-sub" id="sessline">editor console · acp</div></div>
-<div class="dsh-pills"><span class="pill"><span class="dot" id="statusdot"></span> <span id="statustext">idle</span></span><button class="pill" id="modelpill" title="Setup model (provider/model)">deepseek-v4</button><button class="iconbtn" id="new">+ New session</button></div>
+<div class="dsh-pills"><span class="pill"><span class="dot" id="statusdot"></span> <span id="statustext">idle</span></span><button class="pill" id="modelpill" title="Setup model (provider/model + API key)">deepseek-v4</button><button class="pill" id="permpill" title="Open Settings → Permissions">workspace-write</button><button class="iconbtn" id="new">+ New</button></div>
 </div>
 <div class="dsh-tabs"><button class="tab active" id="tabchat">Chat</button><button class="tab" id="tabtraj">Trajectory</button></div>
 <div id="ctxchip"><button id="ctxx" title="Clear context">✕</button><span id="ctxtext"></span></div>
-<div id="log"><div class="day">Sidebar lists sessions + history. This editor tab is the main chat — it switches when you click history.</div></div>
+<div id="log"><div class="day">Harness-style chat — sidebar switches sessions, history loads as transcript.</div><div class="day" id="suggest"><button class="iconbtn sug">Explain this repo</button> <button class="iconbtn sug">Fix failing tests</button> <button class="iconbtn sug">Review my diff</button></div></div>
 <div class="composer"><div class="box">
 <textarea id="in" placeholder="Ask DeepSeek Harness…  (Ctrl+Enter to send · / commands · @ references)"></textarea>
 <div class="bar"><span class="modelchip">cwd: workspace</span><span class="hintline">ACP: session/prompt · streaming updates</span><button class="send" id="send" title="Send">↑</button></div>
@@ -516,6 +552,8 @@ function send(){ const t=input.value; if(!t.trim()||busy) return; input.value=''
 sendBtn.onclick=send;
 document.getElementById('new').onclick=()=>vscode.postMessage({type:'newSession'});
 document.getElementById('modelpill').onclick=()=>vscode.postMessage({type:'modelSetup'});
+document.getElementById('permpill').onclick=()=>vscode.postMessage({type:'openSettings'});
+document.querySelectorAll('.sug').forEach(b=>b.onclick=()=>{ input.value=b.textContent||''; input.focus(); });
 document.getElementById('ctxx').onclick=()=>{ ctxchip.className=''; };
 document.getElementById('tabchat').onclick=()=>{ mode='chat'; document.getElementById('tabchat').className='tab active'; document.getElementById('tabtraj').className='tab'; };
 document.getElementById('tabtraj').onclick=()=>{ mode='traj'; document.getElementById('tabtraj').className='tab active'; document.getElementById('tabchat').className='tab'; };
@@ -525,8 +563,8 @@ window.addEventListener('message', e=>{ const m=e.data;
  if(m.type==='answer'){ rmThinking(); setBusy(false); if(mode==='chat'||/tool|call|traject/i.test(m.text)) addDsh(m.text, m.sessionId); if(m.sessionId) sessline.textContent=(m.title?m.title+' · ':'')+'session '+m.sessionId; }
  if(m.type==='stream'){ rmThinking(); setBusy(true); bubble('dsh', fmt(m.text), '<span>live update</span>'); setBusy(false); }
  if(m.type==='prefill'){ input.value=m.text||''; ctxtext.textContent=m.hint||'opencode context attached'; ctxchip.className='show'; input.focus(); }
- if(m.type==='model'){ const pill=document.getElementById('modelpill'); if(pill&&m.model) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); }
- if(m.type==='init'){ if(m.model){ const pill=document.getElementById('modelpill'); if(pill) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); } if(m.sessionId){ sessline.textContent=(m.title?m.title+' · ':'')+'session '+m.sessionId; } }
+ if(m.type==='model'){ const pill=document.getElementById('modelpill'); if(pill&&m.model) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); if(m.permissionPreset){ const pp=document.getElementById('permpill'); if(pp) pp.textContent=m.permissionPreset; } }
+ if(m.type==='init'){ if(m.model){ const pill=document.getElementById('modelpill'); if(pill) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); } if(m.permissionPreset){ const pp=document.getElementById('permpill'); if(pp) pp.textContent=m.permissionPreset; } if(m.sessionId){ sessline.textContent=(m.title?m.title+' · ':'')+'session '+m.sessionId; } }
  if(m.type==='session'){ log.innerHTML=''; const label=(m.title?m.title+' · ':'')+'session '+m.sessionId+(m.opencodeId?' · opencode '+m.opencodeId.slice(0,8):''); sessline.textContent=label; setBusy(false); (m.history||[]).forEach(h=>{ if(h.role==='user') addUser(h.text); else addDsh(h.text, h.sessionId||m.sessionId); }); if(!(m.history||[]).length) bubble('dsh','Switched session: '+esc(label)+'<br>Ask anything — history clicks land here now.','<span>'+esc(m.sessionId)+'</span>'); if(m.model){ const pill=document.getElementById('modelpill'); if(pill) pill.textContent=(m.model.provider||'')+'/'+(m.model.model||''); } }
 });
 </script></body></html>`;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.7
+
+- Harness-accurate Models: DeepSeek key card, shipped provider picker (anthropic/openai/moonshotai/zai/gemini/groq/openrouter/opencode-gateway/custom), API key write-only with show/hide + env hints, custom API form (Provider ID/base URL/protocol/models) — latest Harness is 0.2.2-rc.5, same as yours
+- Keys in SecretStorage + injected as env (DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, …) into spawned `dsh`; quick `Setup Model` flow now asks key inline too
+- Chat closer to Harness: 800px column, permission pill, suggestion chips, session/model/permission header sync
+
 ## 0.0.6
 
 - Harness-style Settings tab: `DSH: Open Settings` editor panel with General / Models / Permissions / Connection / opencode / About, mirroring Harness layout (left nav + cards + Save)

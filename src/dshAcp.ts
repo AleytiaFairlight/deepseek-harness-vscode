@@ -27,9 +27,19 @@ export class DshAcp {
   private client?: AcpClientLike;
   private current: AcpSessionHandle | null = null;
   private onUpdate?: (text: string) => void;
+  private extraEnv: Record<string, string> = {};
 
   constructor(output: vscode.OutputChannel) {
     this.output = output;
+  }
+
+  /** Provider API keys injected into spawned dsh (mirrors Harness env fallback, never logged). */
+  setExtraEnv(env: Record<string, string>): void {
+    this.extraEnv = { ...env };
+  }
+
+  private spawnEnv(): NodeJS.ProcessEnv {
+    return { ...process.env, ...this.extraEnv };
   }
 
   get activeSessionId(): string | undefined {
@@ -86,7 +96,7 @@ export class DshAcp {
     this.output.appendLine(`[dsh] spawning: ${cliPath} --profile ${profile}`);
     let child: child_process.ChildProcessWithoutNullStreams;
     try {
-      child = child_process.spawn(cliPath, ['--profile', profile], { stdio: ['pipe', 'pipe', 'pipe'] });
+      child = child_process.spawn(cliPath, ['--profile', profile], { stdio: ['pipe', 'pipe', 'pipe'], env: this.spawnEnv() });
     } catch (e) {
       throw new Error(`Cannot spawn "${cliPath}": ${(e as Error).message}. Set deepseekHarness.cliPath to your dsh binary.`);
     }
@@ -201,7 +211,7 @@ export class DshAcp {
     // Keeps the Chat view useful even if the SDK version differs.
     const { cliPath } = this.cfg();
     const cwd = this.workspaceCwd();
-    const fallback = await runHeadless(cliPath, cwd, text, this.output);
+    const fallback = await runHeadless(cliPath, cwd, text, this.output, this.spawnEnv());
     return { sessionId, text: fallback };
   }
 
@@ -213,9 +223,25 @@ export class DshAcp {
   }
 }
 
-function runHeadless(cliPath: string, cwd: string, promptText: string, output: vscode.OutputChannel): Promise<string> {
+export const PROVIDER_ENV: Record<string, string> = {
+  'deepseek-official': 'DEEPSEEK_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  moonshotai: 'MOONSHOT_API_KEY',
+  moonshot: 'MOONSHOT_API_KEY',
+  kimi: 'MOONSHOT_API_KEY',
+  zai: 'ZAI_API_KEY',
+  glm: 'ZAI_API_KEY',
+  gemini: 'GEMINI_API_KEY',
+  google: 'GEMINI_API_KEY',
+  groq: 'GROQ_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+};
+
+function runHeadless(cliPath: string, cwd: string, promptText: string, output: vscode.OutputChannel, env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve) => {
-    const child = child_process.spawn(cliPath, ['--profile', 'headless', promptText], { cwd });
+    const child = child_process.spawn(cliPath, ['--profile', 'headless', promptText], { cwd, env: env ?? process.env });
     let out = '';
     let err = '';
     child.stdout.on('data', (d) => { out += String(d); });

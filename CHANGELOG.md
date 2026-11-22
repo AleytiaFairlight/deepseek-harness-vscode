@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.15
+
+- Stale-panel proof: chat status bar shows `ext v0.0.15`, Output logs the active version, first run after update shows a notice with a one-click “Open DSH Chat” (old tabs must be closed — VS Code never refreshes open webviews on update)
+- Verified end-to-end in a mocked host: activate, both sidebars, panel open, session create all complete in ms with no `dsh`/`opencode` on PATH
+
 ## 0.0.14
 
 - FIX: clicks did nothing when `dsh` was missing — spawn no longer hangs: binary pre-flight (`where`/`which`), 20s connect/initialize timeouts, dead-child detection, 20s per-RPC timeouts, clear Output warnings + headless/error fallback instead of a frozen UI

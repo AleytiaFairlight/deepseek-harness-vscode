@@ -183,6 +183,9 @@ class DshSessionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 
 type ChatMsg = { role: 'user' | 'dsh'; text: string; sessionId?: string };
 
+/** Bumped each release; shown in chat status bar + Output so stale cached panels are obvious. */
+const EXT_VERSION = '0.0.15';
+
 class ChatEditorManager {
   private panel?: vscode.WebviewPanel;
   private transcripts = new Map<string, ChatMsg[]>();
@@ -254,14 +257,17 @@ class ChatEditorManager {
     this.panel = panel;
     const active = this.dsh.activeSessionId;
     const aliases = this.context.globalState.get<Record<string, string>>('dshSessionTitles', {});
-    const perm0 = vscode.workspace.getConfiguration('deepseekHarness').get<string>('permissionPreset', 'workspace-write');
+    const cfg0 = vscode.workspace.getConfiguration('deepseekHarness');
     void panel.webview.postMessage({
       type: 'init',
+      version: EXT_VERSION,
       sessionId: active,
       title: active ? aliases[active] : undefined,
       history: active ? this.transcripts.get(active) ?? [] : [],
       model: this.dsh.getModel(),
-      permissionPreset: perm0,
+      permissionPreset: cfg0.get('permissionPreset', 'workspace-write'),
+      effort: this.dsh.getEffort(),
+      cwd: this.workspaceLabel(),
     });
     return panel;
   }
@@ -536,7 +542,17 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  output.appendLine('[dsh] extension activated. Sidebar = sessions + history; main chat opens in the editor.');
+  output.appendLine(`[dsh] extension activated v${EXT_VERSION}. Sidebar = sessions + history; main chat opens in the editor.`);
+  const seenVer = context.globalState.get<string>('dsh.seenVersion', '');
+  if (seenVer !== EXT_VERSION) {
+    void context.globalState.update('dsh.seenVersion', EXT_VERSION);
+    void vscode.window.showInformationMessage(
+      `DeepSeek Harness ${EXT_VERSION} active. Close any old DSH Chat/Settings tabs so the new UI loads, then use DSH: Open DSH Chat in Editor.`,
+      'Open DSH Chat'
+    ).then((v) => {
+      if (v === 'Open DSH Chat') void vscode.commands.executeCommand('deepseekHarness.openChatEditor');
+    });
+  }
 }
 
 async function runDiagnostics(context: vscode.ExtensionContext, dsh: DshAcp, opencodeTree: OpencodeTreeProvider, sessionTree: DshSessionProvider): Promise<void> {

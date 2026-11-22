@@ -50,14 +50,14 @@ textarea::placeholder{color:var(--vscode-input-placeholderForeground);overflow:h
 <div class="hbar"><span class="sess" id="sessname">Test</span><span class="mode">◈ Standard mode</span><span class="mode">⛉ <span id="subcount">0 subagents</span></span>
 <div class="tabs"><button class="tab active" id="tabchat">Chat</button><button class="tab" id="tabtraj">Trajectory</button><button class="tab">…</button></div>
 <div class="hright"><span id="sessline"></span></div></div>
-<div id="log"><div class="col" id="col"><div style="opacity:.55;font-size:12px;text-align:center">Upstream-faithful chat (ChatFlow + InputBar). History and sessions load here.</div><div class="sugrow"><button class="sug">Explain this repo</button><button class="sug">Fix failing tests</button><button class="sug">Review my diff</button></div></div></div>
+<div id="log"><div class="col" id="col"><div style="opacity:.55;font-size:12px;text-align:center">Upstream-faithful chat v0.0.15 (ChatFlow + InputBar). History and sessions load here.</div><div class="sugrow"><button class="sug">Explain this repo</button><button class="sug">Fix failing tests</button><button class="sug">Review my diff</button></div></div></div>
 <div id="ctxchip"><button id="ctxx">✕</button><span id="ctxtext"></span></div>
 <div class="composer"><div class="cwrap"><div class="card">
 <textarea id="in" placeholder="Message or run a task, / commands, @ files or sessions"></textarea>
 <div class="row"><div class="tools"><button class="add" id="plus" title="Slash commands">+</button><button class="chip" id="permbtn">🛡 <span id="permname">Full access</span> ▾</button><button class="chip" id="cwdbtn">📁 <span id="cwdname">workspace</span> ▾</button></div>
 <div class="trailing"><button class="chip modelpick" id="modelpill"><span id="modelname">model</span> <span id="effort">▾</span></button><button class="send" id="send" title="Send (Ctrl+Enter)">↑</button></div></div>
 </div></div></div>
-<div class="status"><span id="turns">0 turns</span><span id="toks">0 tok</span><span>ACP stdio</span></div>
+<div class="status"><span id="turns">0 turns</span><span id="toks">0 tok</span><span>ACP stdio</span><span id="ver">ext …</span></div>
 <script>
 const vscode = acquireVsCodeApi();
 const col = document.getElementById('col');
@@ -94,7 +94,7 @@ window.addEventListener('message', e=>{ const m=e.data;
  if(m.type==='stream'){ rmThinking(); asst(m.text, false); }
  if(m.type==='prefill'){ input.value=m.text||''; document.getElementById('ctxtext').textContent=m.hint||''; document.getElementById('ctxchip').className='show'; input.focus(); }
  if(m.type==='model'){ if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); const eff=document.getElementById('effort'); if(eff&&m.effort!==undefined) eff.textContent=(m.effort||'default')+' ▾'; if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.cwd) document.getElementById('cwdname').textContent=String(m.cwd).split(/[\\\\/]/).pop()||m.cwd; }
- if(m.type==='init'){ if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.title) document.getElementById('sessname').textContent=m.title; }
+ if(m.type==='init'){ if(m.version) document.getElementById('ver').textContent='ext v'+m.version; if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; if(m.effort!==undefined) document.getElementById('effort').textContent=(m.effort||'default')+' ▾'; if(m.cwd) document.getElementById('cwdname').textContent=String(m.cwd).split(/[\\/]/).pop()||m.cwd; if(m.title) document.getElementById('sessname').textContent=m.title; }
  if(m.type==='session'){ document.getElementById('sessname').textContent=m.title||('session '+(m.sessionId||'').slice(0,8)); document.getElementById('sessline').textContent=(m.sessionId||'').slice(0,14); renderHistory(m.history); if(m.model) document.getElementById('modelname').textContent=(m.model.provider||'')+' '+(m.model.model||''); if(m.permissionPreset) document.getElementById('permname').textContent = m.permissionPreset==='danger-full-access' ? 'Full access' : m.permissionPreset; }
 });
 </script></body></html>`;

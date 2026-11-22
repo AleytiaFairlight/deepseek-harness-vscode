@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DshAcp, PROVIDER_ENV } from './dshAcp';
 import { SettingsManager, PROVIDER_CATALOG, refreshDshEnv } from './settingsPanel';
+import { ensureDshOnBoot, installDsh } from './dshInstall';
 import { chatHtml } from './chatHtml';
 import {
   formatSessionForDsh,
@@ -184,7 +185,7 @@ class DshSessionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 type ChatMsg = { role: 'user' | 'dsh'; text: string; sessionId?: string };
 
 /** Bumped each release; shown in chat status bar + Output so stale cached panels are obvious. */
-const EXT_VERSION = '0.0.15';
+const EXT_VERSION = '0.0.16';
 
 class ChatEditorManager {
   private panel?: vscode.WebviewPanel;
@@ -338,6 +339,11 @@ export function activate(context: vscode.ExtensionContext): void {
     chat.pushModel();
   });
   void refreshDshEnv(context, dsh).then(() => chat.pushModel());
+  // Auto-install the dsh CLI on boot when missing (opt out via deepseekHarness.autoInstallDsh=false).
+  void ensureDshOnBoot(context, dsh, output, () => {
+    sessionTree.refresh();
+    chat.pushModel();
+  });
 
   context.subscriptions.push(
     vscode.commands.registerCommand('deepseekHarness.openChatEditor', async () => {
@@ -348,6 +354,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('deepseekHarness.openSettings', async () => {
       settings.open();
+    }),
+    vscode.commands.registerCommand('deepseekHarness.installDsh', async () => {
+      await installDsh(context, dsh, output, () => {
+        sessionTree.refresh();
+        chat.pushModel();
+      }, true);
     }),
     vscode.commands.registerCommand('deepseekHarness.refreshOpencode', () => opencodeTree.refresh()),
     vscode.commands.registerCommand('deepseekHarness.refreshSessions', () => sessionTree.refresh()),

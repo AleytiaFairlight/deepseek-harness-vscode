@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
@@ -103,6 +103,10 @@
         "icon": "$(gear)"
       },
       {
+        "command": "deepseekHarness.installDsh",
+        "title": "DSH: Install dsh CLI"
+      },
+      {
         "command": "deepseekHarness.diagnose",
         "title": "DSH: Diagnose opencode + DSH connections"
       },
@@ -178,7 +182,12 @@
         "deepseekHarness.cliPath": {
           "type": "string",
           "default": "dsh",
-          "description": "Path to the `dsh` CLI. Must support `dsh --profile acp` (ACP stdio server)."
+          "description": "Path to the `dsh` CLI. Auto-installed on boot unless deepseekHarness.autoInstallDsh is false. Must support `dsh --profile acp` (ACP stdio server)."
+        },
+        "deepseekHarness.autoInstallDsh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically `npm install -g @deepseek-ai/dsh` on boot when no runnable dsh CLI is found (needs Node.js >=24)."
         },
         "deepseekHarness.profile": {
           "type": "string",

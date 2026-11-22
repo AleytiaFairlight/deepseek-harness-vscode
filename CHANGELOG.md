@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.16
+
+- dsh installs itself on boot: when no runnable `dsh` is found, the extension runs `npm i -g @deepseek-ai/dsh@0.2.2-rc.5` (progress notification, cancellable), validates with `dsh --version`, and points `deepseekHarness.cliPath` at the full path if the global bin dir isn't on PATH. Node <24 is detected up front with a download prompt instead of a cryptic failure. Opt out via `deepseekHarness.autoInstallDsh=false`; manual retry via `DSH: Install dsh CLI`
+
 ## 0.0.15
 
 - Stale-panel proof: chat status bar shows `ext v0.0.15`, Output logs the active version, first run after update shows a notice with a one-click “Open DSH Chat” (old tabs must be closed — VS Code never refreshes open webviews on update)

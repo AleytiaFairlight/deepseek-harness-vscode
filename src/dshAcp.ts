@@ -207,7 +207,7 @@ export class DshAcp {
         throw new Error('SDK missing ndJsonStream/client (unexpected version)');
       }
       const stream = sdk.ndJsonStream(toWebWritable, toWebReadable);
-      const app = sdk.client({ name: 'deepseek-harness-vscode', version: '0.0.14' });
+      const app = sdk.client({ name: 'deepseek-harness-vscode', version: '0.0.17' });
       app.onRequest(sdk.methods?.client?.session?.requestPermission ?? 'session/request_permission', async () => ({ outcome: { outcome: 'cancelled' } }));
       app.onNotification(sdk.methods?.client?.session?.update ?? 'session/update', async (n: any) => {
         const text = extractUpdateText(n?.params ?? n);

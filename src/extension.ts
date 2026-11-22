@@ -185,7 +185,7 @@ class DshSessionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 type ChatMsg = { role: 'user' | 'dsh'; text: string; sessionId?: string };
 
 /** Bumped each release; shown in chat status bar + Output so stale cached panels are obvious. */
-const EXT_VERSION = '0.0.16';
+const EXT_VERSION = '0.0.17';
 
 class ChatEditorManager {
   private panel?: vscode.WebviewPanel;

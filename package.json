@@ -2,7 +2,7 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "VS Code extension for DeepSeek Harness (ACP) with opencode session history access",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {

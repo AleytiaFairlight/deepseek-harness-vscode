@@ -50,7 +50,7 @@ textarea::placeholder{color:var(--vscode-input-placeholderForeground);overflow:h
 <div class="hbar"><span class="sess" id="sessname">Test</span><span class="mode">◈ Standard mode</span><span class="mode">⛉ <span id="subcount">0 subagents</span></span>
 <div class="tabs"><button class="tab active" id="tabchat">Chat</button><button class="tab" id="tabtraj">Trajectory</button><button class="tab">…</button></div>
 <div class="hright"><span id="sessline"></span></div></div>
-<div id="log"><div class="col" id="col"><div style="opacity:.55;font-size:12px;text-align:center">Upstream-faithful chat v0.0.15 (ChatFlow + InputBar). History and sessions load here.</div><div class="sugrow"><button class="sug">Explain this repo</button><button class="sug">Fix failing tests</button><button class="sug">Review my diff</button></div></div></div>
+<div id="log"><div class="col" id="col"><div style="opacity:.55;font-size:12px;text-align:center">Upstream-faithful chat v0.0.17 (ChatFlow + InputBar). History and sessions load here.</div><div class="sugrow"><button class="sug">Explain this repo</button><button class="sug">Fix failing tests</button><button class="sug">Review my diff</button></div></div></div>
 <div id="ctxchip"><button id="ctxx">✕</button><span id="ctxtext"></span></div>
 <div class="composer"><div class="cwrap"><div class="card">
 <textarea id="in" placeholder="Message or run a task, / commands, @ files or sessions"></textarea>

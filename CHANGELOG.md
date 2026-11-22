@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.0.16
+## Version track
+
+Patches `0.0.17` → `0.0.21` (0.0.21 is the limit of the 0.0.x line), then minors `0.1.0` → `0.21.0`, then `1.0.0`.
+
+## 0.0.17
+
+- Next incremental patch after 0.0.16 (no behavior change): version stamps only. Patch line continues to its 0.0.21 limit, then `0.1.0`.
 
 - dsh installs itself on boot: when no runnable `dsh` is found, the extension runs `npm i -g @deepseek-ai/dsh@0.2.2-rc.5` (progress notification, cancellable), validates with `dsh --version`, and points `deepseekHarness.cliPath` at the full path if the global bin dir isn't on PATH. Node <24 is detected up front with a download prompt instead of a cryptic failure. Opt out via `deepseekHarness.autoInstallDsh=false`; manual retry via `DSH: Install dsh CLI`
 
